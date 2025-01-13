@@ -17,18 +17,13 @@ import (
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/datasource"
+	"github.com/grafana/grafana-plugin-sdk-go/backend/httpclient"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/instancemgmt"
+	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/resource/httpadapter"
 	"github.com/grafana/grafana-plugin-sdk-go/data"
 
-	"github.com/grafana/grafana/pkg/infra/httpclient"
-	"github.com/grafana/grafana/pkg/infra/log"
-	"github.com/grafana/grafana/pkg/infra/tracing"
 	"github.com/grafana/grafana/pkg/tsdb/cloud-monitoring/kinds/dataquery"
-)
-
-var (
-	slog = log.New("tsdb.cloudMonitoring")
 )
 
 var (
@@ -65,11 +60,11 @@ const (
 	perSeriesAlignerDefault   = "ALIGN_MEAN"
 )
 
-func ProvideService(httpClientProvider httpclient.Provider, tracer tracing.Tracer) *Service {
+func ProvideService(httpClientProvider *httpclient.Provider) *Service {
 	s := &Service{
-		tracer:             tracer,
-		httpClientProvider: httpClientProvider,
-		im:                 datasource.NewInstanceManager(newInstanceSettings(httpClientProvider)),
+		httpClientProvider: *httpClientProvider,
+		im:                 datasource.NewInstanceManager(newInstanceSettings(*httpClientProvider)),
+		logger:             backend.NewLoggerWith("logger", "tsdb.cloudmonitoring"),
 
 		gceDefaultProjectGetter: utils.GCEDefaultProject,
 	}
@@ -109,7 +104,7 @@ func (s *Service) CheckHealth(ctx context.Context, req *backend.CheckHealthReque
 	}
 	defer func() {
 		if err := res.Body.Close(); err != nil {
-			slog.Warn("Failed to close response body", "err", err)
+			s.logger.Warn("Failed to close response body", "err", err)
 		}
 	}()
 
@@ -128,7 +123,7 @@ func (s *Service) CheckHealth(ctx context.Context, req *backend.CheckHealthReque
 type Service struct {
 	httpClientProvider httpclient.Provider
 	im                 instancemgmt.InstanceManager
-	tracer             tracing.Tracer
+	logger             log.Logger
 
 	resourceHandler backend.CallResourceHandler
 
@@ -194,7 +189,7 @@ func newInstanceSettings(httpClientProvider httpclient.Provider) datasource.Inst
 		}
 
 		for name, info := range routes {
-			client, err := newHTTPClient(dsInfo, opts, httpClientProvider, name)
+			client, err := newHTTPClient(dsInfo, opts, &httpClientProvider, name)
 			if err != nil {
 				return nil, err
 			}
@@ -332,7 +327,7 @@ func migrateRequest(req *backend.QueryDataRequest) error {
 // QueryData takes in the frontend queries, parses them into the CloudMonitoring query format
 // executes the queries against the CloudMonitoring API and parses the response into data frames
 func (s *Service) QueryData(ctx context.Context, req *backend.QueryDataRequest) (*backend.QueryDataResponse, error) {
-	logger := slog.FromContext(ctx)
+	logger := s.logger.FromContext(ctx)
 	if len(req.Queries) == 0 {
 		return nil, fmt.Errorf("query contains no queries")
 	}
@@ -347,6 +342,7 @@ func (s *Service) QueryData(ctx context.Context, req *backend.QueryDataRequest) 
 		return nil, err
 	}
 
+	// There aren't any possible downstream errors here
 	queries, err := s.buildQueryExecutors(logger, req)
 	if err != nil {
 		return nil, err
@@ -354,26 +350,31 @@ func (s *Service) QueryData(ctx context.Context, req *backend.QueryDataRequest) 
 
 	switch req.Queries[0].QueryType {
 	case string(dataquery.QueryTypeAnnotation):
-		return s.executeAnnotationQuery(ctx, req, *dsInfo, queries)
+		return s.executeAnnotationQuery(ctx, req, *dsInfo, queries, logger)
 	default:
-		return s.executeTimeSeriesQuery(ctx, req, *dsInfo, queries)
+		return s.executeTimeSeriesQuery(ctx, req, *dsInfo, queries, logger)
 	}
 }
 
-func (s *Service) executeTimeSeriesQuery(ctx context.Context, req *backend.QueryDataRequest, dsInfo datasourceInfo, queries []cloudMonitoringQueryExecutor) (
+func (s *Service) executeTimeSeriesQuery(ctx context.Context, req *backend.QueryDataRequest, dsInfo datasourceInfo, queries []cloudMonitoringQueryExecutor, logger log.Logger) (
 	*backend.QueryDataResponse, error) {
 	resp := backend.NewQueryDataResponse()
 	for _, queryExecutor := range queries {
-		queryRes, dr, executedQueryString, err := queryExecutor.run(ctx, req, s, dsInfo, s.tracer)
+		dr, queryRes, executedQueryString, err := queryExecutor.run(ctx, req, s, dsInfo, logger)
 		if err != nil {
+			resp.Responses[queryExecutor.getRefID()] = backend.ErrorResponseWithErrorSource(err)
 			return resp, err
 		}
-		err = queryExecutor.parseResponse(queryRes, dr, executedQueryString)
+		err = queryExecutor.parseResponse(dr, queryRes, executedQueryString, logger)
 		if err != nil {
-			queryRes.Error = err
+			dr.Error = err
+			// If the error is a downstream error, set the error source
+			if backend.IsDownstreamError(err) {
+				dr.ErrorSource = backend.ErrorSourceDownstream
+			}
 		}
 
-		resp.Responses[queryExecutor.getRefID()] = *queryRes
+		resp.Responses[queryExecutor.getRefID()] = *dr
 	}
 
 	return resp, nil
@@ -405,7 +406,6 @@ func (s *Service) buildQueryExecutors(logger log.Logger, req *backend.QueryDataR
 		case string(dataquery.QueryTypeTimeSeriesList), string(dataquery.QueryTypeAnnotation):
 			cmtsf := &cloudMonitoringTimeSeriesList{
 				refID:   query.RefID,
-				logger:  logger,
 				aliasBy: q.AliasBy,
 			}
 			if q.TimeSeriesList.View == nil || *q.TimeSeriesList.View == "" {
@@ -427,7 +427,6 @@ func (s *Service) buildQueryExecutors(logger log.Logger, req *backend.QueryDataR
 		case string(dataquery.QueryTypeSlo):
 			cmslo := &cloudMonitoringSLO{
 				refID:      query.RefID,
-				logger:     logger,
 				aliasBy:    q.AliasBy,
 				parameters: q.SloQuery,
 			}
@@ -436,14 +435,14 @@ func (s *Service) buildQueryExecutors(logger log.Logger, req *backend.QueryDataR
 		case string(dataquery.QueryTypePromQL):
 			cmp := &cloudMonitoringProm{
 				refID:      query.RefID,
-				logger:     logger,
 				aliasBy:    q.AliasBy,
 				parameters: q.PromQLQuery,
 				timeRange:  req.Queries[0].TimeRange,
+				logger:     logger,
 			}
 			queryInterface = cmp
 		default:
-			return nil, fmt.Errorf("unrecognized query type %q", query.QueryType)
+			return nil, backend.DownstreamError(fmt.Errorf("unrecognized query type %q", query.QueryType))
 		}
 
 		cloudMonitoringQueryExecutors = append(cloudMonitoringQueryExecutors, queryInterface)
@@ -590,12 +589,16 @@ func (s *Service) ensureProject(ctx context.Context, dsInfo datasourceInfo, proj
 
 func (s *Service) getDefaultProject(ctx context.Context, dsInfo datasourceInfo) (string, error) {
 	if dsInfo.authenticationType == gceAuthentication {
-		return s.gceDefaultProjectGetter(ctx, cloudMonitorScope)
+		project, err := s.gceDefaultProjectGetter(ctx, cloudMonitorScope)
+		if err != nil {
+			return project, backend.DownstreamError(err)
+		}
+		return project, nil
 	}
 	return dsInfo.defaultProject, nil
 }
 
-func unmarshalResponse(logger log.Logger, res *http.Response) (cloudMonitoringResponse, error) {
+func unmarshalResponse(res *http.Response, logger log.Logger) (cloudMonitoringResponse, error) {
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
 		return cloudMonitoringResponse{}, err
@@ -608,21 +611,25 @@ func unmarshalResponse(logger log.Logger, res *http.Response) (cloudMonitoringRe
 	}()
 
 	if res.StatusCode/100 != 2 {
-		logger.Error("Request failed", "status", res.Status, "body", string(body))
-		return cloudMonitoringResponse{}, fmt.Errorf("query failed: %s", string(body))
+		logger.Error("Request failed", "status", res.Status, "body", string(body), "statusSource", backend.ErrorSourceDownstream)
+		statusErr := fmt.Errorf("query failed: %s", string(body))
+		if backend.ErrorSourceFromHTTPStatus(res.StatusCode) == backend.ErrorSourceDownstream {
+			return cloudMonitoringResponse{}, backend.DownstreamError(statusErr)
+		}
+		return cloudMonitoringResponse{}, backend.PluginError(statusErr)
 	}
 
 	var data cloudMonitoringResponse
 	err = json.Unmarshal(body, &data)
 	if err != nil {
-		logger.Error("Failed to unmarshal CloudMonitoring response", "error", err, "status", res.Status, "body", string(body))
+		logger.Error("Failed to unmarshal CloudMonitoring response", "error", err, "status", res.Status, "body", string(body), "statusSource", backend.ErrorSourceDownstream)
 		return cloudMonitoringResponse{}, fmt.Errorf("failed to unmarshal query response: %w", err)
 	}
 
 	return data, nil
 }
 
-func addConfigData(frames data.Frames, dl string, unit string, period *string) data.Frames {
+func addConfigData(frames data.Frames, dl string, unit string, period *string, logger log.Logger) data.Frames {
 	for i := range frames {
 		if frames[i].Fields[1].Config == nil {
 			frames[i].Fields[1].Config = &data.FieldConfig{}
@@ -646,7 +653,7 @@ func addConfigData(frames data.Frames, dl string, unit string, period *string) d
 		if period != nil && *period != "" {
 			err := addInterval(*period, frames[i].Fields[0])
 			if err != nil {
-				slog.Error("Failed to add interval", "error", err)
+				logger.Error("Failed to add interval: %s", err, "statusSource", backend.ErrorSourceDownstream)
 			}
 		}
 	}

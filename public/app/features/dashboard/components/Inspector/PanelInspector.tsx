@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { connect, MapStateToProps } from 'react-redux';
-import { useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router-dom-v5-compat';
 
 import { PanelPlugin } from '@grafana/data';
 import { locationService } from '@grafana/runtime';
-import { DashboardModel, PanelModel } from 'app/features/dashboard/state';
+import { DashboardModel } from 'app/features/dashboard/state/DashboardModel';
+import { PanelModel } from 'app/features/dashboard/state/PanelModel';
 import { InspectTab } from 'app/features/inspector/types';
 import { getPanelStateForModel } from 'app/features/panel/state/selectors';
 import { StoreState } from 'app/types';
@@ -35,7 +36,7 @@ const PanelInspectorUnconnected = ({ panel, dashboard, plugin }: Props) => {
     withFieldConfig: true,
   });
 
-  const { data, isLoading, hasError } = usePanelLatestData(panel, dataOptions, true);
+  const { data, isLoading, hasError } = usePanelLatestData(panel, dataOptions, false);
   const metaDs = useDatasourceMetadata(data);
   const tabs = useInspectTabs(panel, dashboard, plugin, hasError, metaDs);
 

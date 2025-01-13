@@ -1,4 +1,3 @@
-import { flattenDeep } from 'lodash';
 import { lastValueFrom } from 'rxjs';
 
 import {
@@ -409,9 +408,11 @@ describe('decorateWithCorrelations', () => {
       correlations: [],
       defaultTargetDatasource: undefined,
     })(panelData);
-    expect(
-      flattenDeep(postDecoratedPanel.series.map((frame) => frame.fields.map((field) => field.config.links)))
-    ).toEqual([]);
+
+    const flattenedLinks = postDecoratedPanel.series
+      .flatMap((frame) => frame.fields)
+      .flatMap((field) => field.config.links);
+    expect(flattenedLinks).toEqual([]);
   });
 
   it('returns one field link per field if there are no correlations, but there are editor links', () => {
@@ -430,9 +431,11 @@ describe('decorateWithCorrelations', () => {
       correlations: [],
       defaultTargetDatasource: datasource,
     })(panelData);
-    const flattenedLinks = flattenDeep(
-      postDecoratedPanel.series.map((frame) => frame.fields.map((field) => field.config.links))
-    );
+
+    const flattenedLinks = postDecoratedPanel.series
+      .flatMap((frame) => frame.fields)
+      .flatMap((field) => field.config.links);
+
     expect(flattenedLinks.length).toEqual(table.fields.length);
     expect(flattenedLinks[0]).not.toBeUndefined();
   });
@@ -454,9 +457,11 @@ describe('decorateWithCorrelations', () => {
       correlations: correlations,
       defaultTargetDatasource: datasource,
     })(panelData);
-    const flattenedLinks = flattenDeep(
-      postDecoratedPanel.series.map((frame) => frame.fields.map((field) => field.config.links))
-    );
+
+    const flattenedLinks = postDecoratedPanel.series
+      .flatMap((frame) => frame.fields)
+      .flatMap((field) => field.config.links);
+
     expect(flattenedLinks.length).toEqual(table.fields.length);
     expect(flattenedLinks[0]).not.toBeUndefined();
   });
@@ -477,6 +482,7 @@ describe('decorateWithCorrelations', () => {
         source: datasourceInstance,
         target: datasourceInstance,
         provisioned: true,
+        type: 'query',
         config: { field: panelData.series[0].fields[0].name },
       },
     ] as CorrelationData[];
@@ -487,8 +493,11 @@ describe('decorateWithCorrelations', () => {
       correlations: correlations,
       defaultTargetDatasource: undefined,
     })(panelData);
-    expect(
-      flattenDeep(postDecoratedPanel.series.map((frame) => frame.fields.map((field) => field.config.links))).length
-    ).toEqual(correlations.length);
+
+    const flattenedLinks = postDecoratedPanel.series
+      .flatMap((frame) => frame.fields)
+      .flatMap((field) => field.config.links);
+
+    expect(flattenedLinks.length).toEqual(correlations.length);
   });
 });

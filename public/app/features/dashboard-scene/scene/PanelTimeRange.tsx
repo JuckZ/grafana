@@ -1,5 +1,4 @@
 import { css } from '@emotion/css';
-import React from 'react';
 
 import { dateMath, getDefaultTimeRange, GrafanaTheme2, rangeUtil, TimeRange } from '@grafana/data';
 import {
@@ -8,11 +7,12 @@ import {
   SceneTimeRangeLike,
   SceneTimeRangeState,
   SceneTimeRangeTransformerBase,
+  VariableDependencyConfig,
 } from '@grafana/scenes';
 import { Icon, PanelChrome, TimePickerTooltip, Tooltip, useStyles2 } from '@grafana/ui';
 import { TimeOverrideResult } from 'app/features/dashboard/utils/panel';
 
-interface PanelTimeRangeState extends SceneTimeRangeState {
+export interface PanelTimeRangeState extends SceneTimeRangeState {
   timeFrom?: string;
   timeShift?: string;
   hideTimeOverride?: boolean;
@@ -30,8 +30,28 @@ export class PanelTimeRange extends SceneTimeRangeTransformerBase<PanelTimeRange
       to: 'now',
       value: getDefaultTimeRange(),
     });
+
+    this.addActivationHandler(() => this._onActivate());
   }
 
+  protected _variableDependency: VariableDependencyConfig<PanelTimeRangeState> = new VariableDependencyConfig(this, {
+    statePaths: ['timeFrom', 'timeShift'],
+  });
+
+  private _onActivate() {
+    this._subs.add(
+      this.subscribeToState((n) => {
+        const { timeInfo, timeRange } = this.getTimeOverride(this.getAncestorTimeRange().state.value);
+
+        // When timeFrom or timeShift is a variable we cannot compare to previous interpolated value
+        //   therefore we need to compare timeInfo directly and update when required
+        // Note: compare to newState.timeInfo because it is always one behind
+        if (n.timeInfo !== timeInfo) {
+          this.setState({ timeInfo, value: timeRange });
+        }
+      })
+    );
+  }
   protected ancestorTimeRangeChanged(timeRange: SceneTimeRangeState): void {
     const overrideResult = this.getTimeOverride(timeRange.value);
     this.setState({ value: overrideResult.timeRange, timeInfo: overrideResult.timeInfo });
@@ -104,6 +124,7 @@ const getStyles = (theme: GrafanaTheme2) => {
     timeshift: css({
       color: theme.colors.text.link,
       gap: theme.spacing(0.5),
+      whiteSpace: 'nowrap',
     }),
   };
 };

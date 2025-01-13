@@ -11,8 +11,8 @@ import {
   createDataFrame,
   TimeRange,
 } from '@grafana/data';
+import { SQLQuery } from '@grafana/sql';
 import { backendSrv } from 'app/core/services/backend_srv';
-import { SQLQuery } from 'app/features/plugins/sql/types';
 import { TemplateSrv } from 'app/features/templating/template_srv';
 
 import { initialCustomVariableModelState } from '../../../features/variables/custom/reducer';
@@ -23,6 +23,11 @@ import { MssqlOptions } from './types';
 jest.mock('@grafana/runtime', () => ({
   ...jest.requireActual('@grafana/runtime'),
   getBackendSrv: () => backendSrv,
+}));
+
+// mock uuidv4 to give back the same value every time
+jest.mock('uuid', () => ({
+  v4: () => '0000',
 }));
 
 const instanceSettings = {
@@ -173,8 +178,7 @@ describe('MSSQLDatasource', () => {
     it('should return a list of fields when fetchFields is called', async () => {
       const fetchFieldsResponse = {
         results: {
-          columns: {
-            refId: 'columns',
+          [`columns-0000`]: {
             frames: [
               dataFrameToJSON(
                 createDataFrame({

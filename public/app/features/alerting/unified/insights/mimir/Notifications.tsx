@@ -1,24 +1,30 @@
-import React from 'react';
-
 import { PanelBuilders, SceneFlexItem, SceneQueryRunner } from '@grafana/scenes';
 import { DataSourceRef, GraphDrawStyle, TooltipDisplayMode } from '@grafana/schema';
 
-import { overrideToFixedColor, PANEL_STYLES } from '../../home/Insights';
-import { InsightsRatingModal } from '../RatingModal';
+import { INSTANCE_ID, PANEL_STYLES, overrideToFixedColor } from '../../home/Insights';
+import { InsightsMenuButton } from '../InsightsMenuButton';
 
 export function getNotificationsScene(datasource: DataSourceRef, panelTitle: string) {
+  const exprA = INSTANCE_ID
+    ? `sum by(cluster)(grafanacloud_instance_alertmanager_notifications_per_second{id="${INSTANCE_ID}"}) - sum by (cluster)(grafanacloud_instance_alertmanager_notifications_failed_per_second{id="${INSTANCE_ID}"})`
+    : `sum by(cluster)(grafanacloud_instance_alertmanager_notifications_per_second) - sum by (cluster)(grafanacloud_instance_alertmanager_notifications_failed_per_second)`;
+
+  const exprB = INSTANCE_ID
+    ? `sum by(cluster)(grafanacloud_instance_alertmanager_notifications_failed_per_second{id="${INSTANCE_ID}"})`
+    : `sum by(cluster)(grafanacloud_instance_alertmanager_notifications_failed_per_second)`;
+
   const query = new SceneQueryRunner({
     datasource,
     queries: [
       {
         refId: 'A',
-        expr: 'sum by(cluster)(grafanacloud_instance_alertmanager_notifications_per_second) - sum by (cluster)(grafanacloud_instance_alertmanager_notifications_failed_per_second)',
+        expr: exprA,
         range: true,
         legendFormat: 'success',
       },
       {
         refId: 'B',
-        expr: 'sum by(cluster)(grafanacloud_instance_alertmanager_notifications_failed_per_second)',
+        expr: exprB,
         range: true,
         legendFormat: 'failed',
       },
@@ -40,7 +46,7 @@ export function getNotificationsScene(datasource: DataSourceRef, panelTitle: str
           .matchFieldsWithName('failed')
           .overrideColor(overrideToFixedColor('failed'))
       )
-      .setHeaderActions(<InsightsRatingModal panel={panelTitle} />)
+      .setHeaderActions([new InsightsMenuButton({ panel: panelTitle })])
       .build(),
   });
 }

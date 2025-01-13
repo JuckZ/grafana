@@ -19,6 +19,7 @@ import (
 	ac "github.com/grafana/grafana/pkg/services/accesscontrol"
 	"github.com/grafana/grafana/pkg/services/accesscontrol/acimpl"
 	"github.com/grafana/grafana/pkg/services/accesscontrol/actest"
+	"github.com/grafana/grafana/pkg/services/authz/zanzana"
 	contextmodel "github.com/grafana/grafana/pkg/services/contexthandler/model"
 	"github.com/grafana/grafana/pkg/services/datasources"
 	"github.com/grafana/grafana/pkg/services/datasources/guardian"
@@ -115,7 +116,7 @@ func TestAddDataSource_URLWithoutProtocol(t *testing.T) {
 			expectedDatasource: &datasources.DataSource{},
 		},
 		Cfg:                  setting.NewCfg(),
-		AccessControl:        acimpl.ProvideAccessControl(setting.NewCfg()),
+		AccessControl:        acimpl.ProvideAccessControl(featuremgmt.WithFeatures(), zanzana.NewNoopClient()),
 		accesscontrolService: actest.FakeService{},
 	}
 
@@ -147,10 +148,10 @@ func TestAddDataSource_InvalidJSONData(t *testing.T) {
 	sc := setupScenarioContext(t, "/api/datasources")
 
 	hs.Cfg = setting.NewCfg()
-	hs.Cfg.AuthProxyEnabled = true
-	hs.Cfg.AuthProxyHeaderName = "X-AUTH-PROXY-HEADER"
+	hs.Cfg.AuthProxy.Enabled = true
+	hs.Cfg.AuthProxy.HeaderName = "X-AUTH-PROXY-HEADER"
 	jsonData := simplejson.New()
-	jsonData.Set("httpHeaderName1", hs.Cfg.AuthProxyHeaderName)
+	jsonData.Set("httpHeaderName1", hs.Cfg.AuthProxy.HeaderName)
 
 	sc.m.Post(sc.url, routing.Wrap(func(c *contextmodel.ReqContext) response.Response {
 		c.Req.Body = mockRequestBody(datasources.AddDataSourceCommand{
@@ -201,10 +202,10 @@ func TestUpdateDataSource_InvalidJSONData(t *testing.T) {
 	}
 	sc := setupScenarioContext(t, "/api/datasources/1234")
 
-	hs.Cfg.AuthProxyEnabled = true
-	hs.Cfg.AuthProxyHeaderName = "X-AUTH-PROXY-HEADER"
+	hs.Cfg.AuthProxy.Enabled = true
+	hs.Cfg.AuthProxy.HeaderName = "X-AUTH-PROXY-HEADER"
 	jsonData := simplejson.New()
-	jsonData.Set("httpHeaderName1", hs.Cfg.AuthProxyHeaderName)
+	jsonData.Set("httpHeaderName1", hs.Cfg.AuthProxy.HeaderName)
 
 	sc.m.Put(sc.url, routing.Wrap(func(c *contextmodel.ReqContext) response.Response {
 		c.Req.Body = mockRequestBody(datasources.AddDataSourceCommand{
@@ -222,93 +223,58 @@ func TestUpdateDataSource_InvalidJSONData(t *testing.T) {
 
 	assert.Equal(t, 400, sc.resp.Code)
 }
-
-// Using a team HTTP header whose name matches the name specified for auth proxy header should fail
-func TestUpdateDataSourceTeamHTTPHeaders_InvalidJSONData(t *testing.T) {
+func TestAddDataSourceTeamHTTPHeaders(t *testing.T) {
 	tenantID := "1234"
-	testcases := []struct {
-		desc string
-		data datasources.TeamHTTPHeaders
-		want int
-	}{
-		{
-			desc: "We should only allow for headers being X-Prom-Label-Policy",
-			data: datasources.TeamHTTPHeaders{tenantID: []datasources.TeamHTTPHeader{
+	hs := &HTTPServer{
+		DataSourcesService: &dataSourcesServiceMock{
+			expectedDatasource: &datasources.DataSource{},
+		},
+		Cfg:                  setting.NewCfg(),
+		Features:             featuremgmt.WithFeatures(featuremgmt.FlagTeamHttpHeaders),
+		accesscontrolService: actest.FakeService{},
+		AccessControl: actest.FakeAccessControl{
+			ExpectedEvaluate: true,
+			ExpectedErr:      nil,
+		},
+	}
+	sc := setupScenarioContext(t, fmt.Sprintf("/api/datasources/%s", tenantID))
+	hs.Cfg.AuthProxy.Enabled = true
+
+	jsonData := simplejson.New()
+	jsonData.Set("teamHttpHeaders", datasources.TeamHTTPHeaders{
+		Headers: datasources.TeamHeaders{
+			tenantID: []datasources.TeamHTTPHeader{
 				{
 					Header: "Authorization",
 					Value:  "foo!=bar",
 				},
 			},
-			},
-			want: 400,
 		},
-		{
-			desc: "Allowed header but no team id",
-			data: datasources.TeamHTTPHeaders{"": []datasources.TeamHTTPHeader{
-				{
-					Header: "X-Prom-Label-Policy",
-					Value:  "foo=bar",
-				},
-			},
-			},
-			want: 400,
-		},
-		{
-			desc: "Allowed team id and header name with invalid header values ",
-			data: datasources.TeamHTTPHeaders{tenantID: []datasources.TeamHTTPHeader{
-				{
-					Header: "X-Prom-Label-Policy",
-					Value:  "Bad value",
-				},
-			},
-			},
-			want: 400,
-		},
-		// Complete valid case, with team id, header name and header value
-		{
-			desc: "Allowed header and header values ",
-			data: datasources.TeamHTTPHeaders{tenantID: []datasources.TeamHTTPHeader{
-				{
-					Header: "X-Prom-Label-Policy",
-					Value:  `1234:{ name!="value",foo!~"bar" }`,
-				},
-			},
-			},
-			want: 200,
-		},
-	}
-	for _, tc := range testcases {
-		t.Run(tc.desc, func(t *testing.T) {
-			hs := &HTTPServer{
-				DataSourcesService: &dataSourcesServiceMock{
-					expectedDatasource: &datasources.DataSource{},
-				},
-				Cfg:                  setting.NewCfg(),
-				Features:             featuremgmt.WithFeatures(featuremgmt.FlagTeamHttpHeaders),
-				accesscontrolService: actest.FakeService{},
-			}
-			sc := setupScenarioContext(t, fmt.Sprintf("/api/datasources/%s", tenantID))
-			hs.Cfg.AuthProxyEnabled = true
-
-			jsonData := simplejson.New()
-			jsonData.Set("teamHttpHeaders", tc.data)
-			sc.m.Put(sc.url, routing.Wrap(func(c *contextmodel.ReqContext) response.Response {
-				c.Req.Body = mockRequestBody(datasources.AddDataSourceCommand{
-					Name:     "Test",
-					URL:      "localhost:5432",
-					Access:   "direct",
-					Type:     "test",
-					JsonData: jsonData,
-				})
-				c.SignedInUser = authedUserWithPermissions(1, 1, []ac.Permission{})
-				return hs.AddDataSource(c)
-			}))
-
-			sc.fakeReqWithParams("PUT", sc.url, map[string]string{}).exec()
-
-			assert.Equal(t, tc.want, sc.resp.Code)
+	})
+	sc.m.Put(sc.url, routing.Wrap(func(c *contextmodel.ReqContext) response.Response {
+		c.Req.Body = mockRequestBody(datasources.AddDataSourceCommand{
+			Name:     "Test",
+			URL:      "localhost:5432",
+			Access:   "direct",
+			Type:     "test",
+			JsonData: jsonData,
 		})
-	}
+		c.SignedInUser = authedUserWithPermissions(1, 1, []ac.Permission{
+			{Action: datasources.ActionPermissionsWrite, Scope: datasources.ScopeAll},
+		})
+		return hs.AddDataSource(c)
+	}))
+
+	sc.fakeReqWithParams("PUT", sc.url, map[string]string{}).exec()
+	assert.Equal(t, http.StatusForbidden, sc.resp.Code)
+
+	// Parse the JSON response
+	var response map[string]string
+	err := json.Unmarshal(sc.resp.Body.Bytes(), &response)
+	assert.NoError(t, err, "Failed to parse JSON response")
+
+	// Check the error message in the JSON response
+	assert.Equal(t, "Cannot create datasource with team HTTP headers, need to use updateDatasourceLBACRules API", response["message"])
 }
 
 // Updating data sources with URLs not specifying protocol should work.
@@ -321,7 +287,7 @@ func TestUpdateDataSource_URLWithoutProtocol(t *testing.T) {
 			expectedDatasource: &datasources.DataSource{},
 		},
 		Cfg:                  setting.NewCfg(),
-		AccessControl:        acimpl.ProvideAccessControl(setting.NewCfg()),
+		AccessControl:        acimpl.ProvideAccessControl(featuremgmt.WithFeatures(), zanzana.NewNoopClient()),
 		accesscontrolService: actest.FakeService{},
 	}
 
@@ -354,7 +320,7 @@ func TestUpdateDataSourceByID_DataSourceNameExists(t *testing.T) {
 			},
 		},
 		Cfg:                  setting.NewCfg(),
-		AccessControl:        acimpl.ProvideAccessControl(setting.NewCfg()),
+		AccessControl:        acimpl.ProvideAccessControl(featuremgmt.WithFeatures(), zanzana.NewNoopClient()),
 		accesscontrolService: actest.FakeService{},
 		Live:                 newTestLive(t, nil),
 	}
@@ -481,31 +447,6 @@ func TestAPI_datasources_AccessControl(t *testing.T) {
 	}
 }
 
-// TeamHTTPHeaderValueRegexMatch returns a regex that can be used to check
-func TestTeamHTTPHeaderValueRegexMatch(t *testing.T) {
-	testcases := []struct {
-		desc            string
-		teamHeaderValue string
-		want            bool
-	}{
-		{
-			desc:            "Should be valid regex match for team headervalue",
-			teamHeaderValue: `1234:{ name!="value",foo!~"bar" }`,
-			want:            true,
-		},
-		{
-			desc:            "Should return false for incorrect header value",
-			teamHeaderValue: `1234:!="value",foo!~"bar" }`,
-			want:            false,
-		},
-	}
-	for _, tc := range testcases {
-		t.Run(tc.desc, func(t *testing.T) {
-			assert.Equal(t, tc.want, teamHTTPHeaderValueRegexMatch(tc.teamHeaderValue))
-		})
-	}
-}
-
 type dataSourcesServiceMock struct {
 	datasources.DataSourceService
 
@@ -526,10 +467,6 @@ func (m *dataSourcesServiceMock) GetDataSources(ctx context.Context, query *data
 
 func (m *dataSourcesServiceMock) GetDataSourcesByType(ctx context.Context, query *datasources.GetDataSourcesByTypeQuery) ([]*datasources.DataSource, error) {
 	return m.expectedDatasources, m.expectedError
-}
-
-func (m *dataSourcesServiceMock) GetDefaultDataSource(ctx context.Context, query *datasources.GetDefaultDataSourceQuery) (*datasources.DataSource, error) {
-	return nil, m.expectedError
 }
 
 func (m *dataSourcesServiceMock) DeleteDataSource(ctx context.Context, cmd *datasources.DeleteDataSourceCommand) error {

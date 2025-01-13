@@ -1,72 +1,96 @@
-import { css } from '@emotion/css';
-import React from 'react';
-import { useLocation } from 'react-router-dom';
+import { useEffect, useMemo } from 'react';
+import { useLocation, useParams } from 'react-router-dom-v5-compat';
 
-import { GrafanaTheme2, PageLayoutType } from '@grafana/data';
-import { SceneComponentProps, SceneDebugger } from '@grafana/scenes';
-import { CustomScrollbar, useStyles2 } from '@grafana/ui';
+import { PageLayoutType } from '@grafana/data';
+import { SceneComponentProps } from '@grafana/scenes';
 import { Page } from 'app/core/components/Page/Page';
+import { EntityNotFound } from 'app/core/components/PageNotFound/EntityNotFound';
+import { getNavModel } from 'app/core/selectors/navModel';
+import DashboardEmpty from 'app/features/dashboard/dashgrid/DashboardEmpty';
+import { useSelector } from 'app/types';
+
+import { DashboardEditPaneSplitter } from '../edit-pane/DashboardEditPaneSplitter';
 
 import { DashboardScene } from './DashboardScene';
-import { NavToolbarActions } from './NavToolbarActions';
+import { PanelSearchLayout } from './PanelSearchLayout';
+import { DashboardAngularDeprecationBanner } from './angular/DashboardAngularDeprecationBanner';
 
 export function DashboardSceneRenderer({ model }: SceneComponentProps<DashboardScene>) {
-  const { controls, viewPanelKey: viewPanelId, overlay } = model.useState();
-  const styles = useStyles2(getStyles);
+  const {
+    controls,
+    overlay,
+    editview,
+    editPanel,
+    isEmpty,
+    meta,
+    viewPanelScene,
+    panelSearch,
+    panelsPerRow,
+    isEditing,
+  } = model.useState();
+  const { type } = useParams();
   const location = useLocation();
-  const pageNav = model.getPageNav(location);
-  const bodyToRender = model.getBodyToRender(viewPanelId);
+  const navIndex = useSelector((state) => state.navIndex);
+  const pageNav = model.getPageNav(location, navIndex);
+  const bodyToRender = model.getBodyToRender();
+  const navModel = getNavModel(navIndex, `dashboards/${type === 'snapshot' ? 'snapshots' : 'browse'}`);
+  const isSettingsOpen = editview !== undefined;
+
+  // Remember scroll pos when going into view panel, edit panel or settings
+  useMemo(() => {
+    if (viewPanelScene || isSettingsOpen || editPanel) {
+      model.rememberScrollPos();
+    }
+  }, [isSettingsOpen, editPanel, viewPanelScene, model]);
+
+  // Restore scroll pos when coming back
+  useEffect(() => {
+    if (!viewPanelScene && !isSettingsOpen && !editPanel) {
+      model.restoreScrollPos();
+    }
+  }, [isSettingsOpen, editPanel, viewPanelScene, model]);
+
+  if (editview) {
+    return (
+      <>
+        <editview.Component model={editview} />
+        {overlay && <overlay.Component model={overlay} />}
+      </>
+    );
+  }
+
+  function renderBody() {
+    if (meta.dashboardNotFound) {
+      return <EntityNotFound entity="Dashboard" key="dashboard-not-found" />;
+    }
+
+    if (panelSearch || panelsPerRow) {
+      return <PanelSearchLayout panelSearch={panelSearch} panelsPerRow={panelsPerRow} dashboard={model} />;
+    }
+
+    return (
+      <>
+        <DashboardAngularDeprecationBanner dashboard={model} key="angular-deprecation-banner" />
+        {isEmpty && (
+          <DashboardEmpty dashboard={model} canCreate={!!model.state.meta.canEdit} key="dashboard-empty-state" />
+        )}
+        <bodyToRender.Component model={bodyToRender} />
+      </>
+    );
+  }
 
   return (
-    <Page navId="scenes" pageNav={pageNav} layout={PageLayoutType.Custom}>
-      <CustomScrollbar autoHeightMin={'100%'}>
-        <div className={styles.canvasContent}>
-          <NavToolbarActions dashboard={model} />
-          {controls && (
-            <div className={styles.controls}>
-              {controls.map((control) => (
-                <control.Component key={control.state.key} model={control} />
-              ))}
-              <SceneDebugger scene={model} key={'scene-debugger'} />
-            </div>
-          )}
-          <div className={styles.body}>
-            <bodyToRender.Component model={bodyToRender} />
-          </div>
-        </div>
-      </CustomScrollbar>
+    <Page navModel={navModel} pageNav={pageNav} layout={PageLayoutType.Custom}>
+      {editPanel && <editPanel.Component model={editPanel} />}
+      {!editPanel && (
+        <DashboardEditPaneSplitter
+          dashboard={model}
+          isEditing={isEditing}
+          controls={controls && <controls.Component model={controls} />}
+          body={renderBody()}
+        />
+      )}
       {overlay && <overlay.Component model={overlay} />}
     </Page>
   );
-}
-
-function getStyles(theme: GrafanaTheme2) {
-  return {
-    canvasContent: css({
-      label: 'canvas-content',
-      display: 'flex',
-      flexDirection: 'column',
-      padding: theme.spacing(0, 2),
-      flexBasis: '100%',
-      flexGrow: 1,
-    }),
-    body: css({
-      label: 'body',
-      flexGrow: 1,
-      display: 'flex',
-      gap: '8px',
-      marginBottom: theme.spacing(2),
-    }),
-    controls: css({
-      display: 'flex',
-      flexWrap: 'wrap',
-      alignItems: 'center',
-      gap: theme.spacing(1),
-      position: 'sticky',
-      top: 0,
-      background: theme.colors.background.canvas,
-      zIndex: 1,
-      padding: theme.spacing(2, 0),
-    }),
-  };
 }

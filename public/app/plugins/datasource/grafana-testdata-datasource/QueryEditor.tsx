@@ -1,4 +1,4 @@
-import React, { FormEvent, useMemo } from 'react';
+import { FormEvent, useMemo } from 'react';
 import { useAsync } from 'react-use';
 
 import { QueryEditorProps, SelectableValue } from '@grafana/data';
@@ -10,6 +10,7 @@ import { CSVContentEditor } from './components/CSVContentEditor';
 import { CSVFileEditor } from './components/CSVFileEditor';
 import { CSVWavesEditor } from './components/CSVWaveEditor';
 import ErrorEditor from './components/ErrorEditor';
+import ErrorWithSourceQueryEditor from './components/ErrorWithSourceEditor';
 import { GrafanaLiveEditor } from './components/GrafanaLiveEditor';
 import { NodeGraphEditor } from './components/NodeGraphEditor';
 import { PredictablePulseEditor } from './components/PredictablePulseEditor';
@@ -17,7 +18,7 @@ import { RawFrameEditor } from './components/RawFrameEditor';
 import { SimulationQueryEditor } from './components/SimulationQueryEditor';
 import { USAQueryEditor, usaQueryModes } from './components/USAQueryEditor';
 import { defaultCSVWaveQuery, defaultPulseQuery, defaultQuery } from './constants';
-import { CSVWave, NodesQuery, TestData, TestDataQueryType, USAQuery } from './dataquery.gen';
+import { CSVWave, NodesQuery, TestDataDataQuery, TestDataQueryType, USAQuery } from './dataquery';
 import { TestDataDataSource } from './datasource';
 import { defaultStreamQuery } from './runStreams';
 
@@ -31,11 +32,11 @@ const selectors = editorSelectors.components.DataSource.TestData.QueryTab;
 
 export interface EditorProps {
   onChange: (value: any) => void;
-  query: TestData;
+  query: TestDataDataQuery;
   ds: TestDataDataSource;
 }
 
-export type Props = QueryEditorProps<TestDataDataSource, TestData>;
+export type Props = QueryEditorProps<TestDataDataSource, TestDataDataQuery>;
 
 export const QueryEditor = ({ query, datasource, onChange, onRunQuery }: Props) => {
   query = { ...defaultQuery, ...query };
@@ -63,7 +64,7 @@ export const QueryEditor = ({ query, datasource, onChange, onRunQuery }: Props) 
     }));
   }, []);
 
-  const onUpdate = (query: TestData) => {
+  const onUpdate = (query: TestDataDataQuery) => {
     onChange(query);
     onRunQuery();
   };
@@ -83,7 +84,7 @@ export const QueryEditor = ({ query, datasource, onChange, onRunQuery }: Props) 
     }
 
     // Clear model from existing props that belong to other scenarios
-    const update: TestData = {
+    const update: TestDataDataQuery = {
       scenarioId: item.value! as TestDataQueryType,
       refId: query.refId,
       alias: query.alias,
@@ -120,6 +121,9 @@ export const QueryEditor = ({ query, datasource, onChange, onRunQuery }: Props) 
         update.usa = {
           mode: usaQueryModes[0].value,
         };
+        break;
+      case TestDataQueryType.ErrorWithSource:
+        update.errorSource = 'plugin';
     }
 
     onUpdate(update);
@@ -127,7 +131,7 @@ export const QueryEditor = ({ query, datasource, onChange, onRunQuery }: Props) 
 
   const onInputChange = (e: FormEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value, type } = e.currentTarget;
-    let newValue: any = value;
+    let newValue: string | number | boolean = value;
 
     if (type === 'number') {
       newValue = Number(value);
@@ -142,7 +146,7 @@ export const QueryEditor = ({ query, datasource, onChange, onRunQuery }: Props) 
 
   const onFieldChange = (field: string) => (e: { target: { name: string; value: string; type: string } }) => {
     const { name, value, type } = e.target;
-    let newValue: any = value;
+    let newValue: string | number = value;
 
     if (type === 'number') {
       newValue = Number(value);
@@ -378,6 +382,9 @@ export const QueryEditor = ({ query, datasource, onChange, onRunQuery }: Props) 
             placeholder="10"
           />
         </InlineField>
+      )}
+      {scenarioId === TestDataQueryType.ErrorWithSource && (
+        <ErrorWithSourceQueryEditor onChange={onUpdate} query={query} ds={datasource} />
       )}
 
       {description && <p>{description}</p>}

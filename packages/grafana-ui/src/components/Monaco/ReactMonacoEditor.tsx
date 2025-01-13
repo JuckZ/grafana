@@ -1,19 +1,17 @@
-import MonacoEditor, { loader as monacoEditorLoader, Monaco } from '@monaco-editor/react';
-import React, { useCallback } from 'react';
+import Editor, { loader as monacoEditorLoader, Monaco } from '@monaco-editor/react';
+import * as monaco from 'monaco-editor';
+import { useCallback } from 'react';
 
 import { useTheme2 } from '../../themes';
 
 import defineThemes from './theme';
 import type { ReactMonacoEditorProps } from './types';
 
-monacoEditorLoader.config({
-  paths: {
-    vs: (window.__grafana_public_path__ ?? 'public/') + 'lib/monaco/min/vs',
-  },
-});
+// pass the monaco editor to the loader to bypass requirejs
+monacoEditorLoader.config({ monaco });
 
 export const ReactMonacoEditor = (props: ReactMonacoEditorProps) => {
-  const { beforeMount } = props;
+  const { beforeMount, options, ...restProps } = props;
 
   const theme = useTheme2();
   const onMonacoBeforeMount = useCallback(
@@ -25,8 +23,12 @@ export const ReactMonacoEditor = (props: ReactMonacoEditorProps) => {
   );
 
   return (
-    <MonacoEditor
-      {...props}
+    <Editor
+      {...restProps}
+      options={{
+        ...options,
+        fontFamily: theme.typography.code.fontFamily,
+      }}
       theme={theme.isDark ? 'grafana-dark' : 'grafana-light'}
       beforeMount={onMonacoBeforeMount}
     />

@@ -1,6 +1,9 @@
 /* Prometheus internal models */
 
 import { AlertState, DataSourceInstanceSettings } from '@grafana/data';
+import { PromOptions } from '@grafana/prometheus';
+import { GRAFANA_RULES_SOURCE_NAME } from 'app/features/alerting/unified/utils/datasource';
+import { LokiOptions } from 'app/plugins/datasource/loki/types';
 
 import {
   Annotations,
@@ -26,8 +29,11 @@ export function hasAlertState(alert: Alert, state: PromAlertingRuleState | Grafa
   return mapStateWithReasonToBaseState(alert.state) === state;
 }
 
+// Prometheus API uses "err" but grafana API uses "error" *sigh*
+export type RuleHealth = 'nodata' | 'error' | 'err' | string;
+
 interface RuleBase {
-  health: string;
+  health: RuleHealth;
   name: string;
   query: string;
   lastEvaluation?: string;
@@ -37,7 +43,7 @@ interface RuleBase {
 
 export interface AlertingRule extends RuleBase {
   alerts?: Alert[];
-  labels: {
+  labels?: {
     [key: string]: string;
   };
   annotations?: {
@@ -45,6 +51,11 @@ export interface AlertingRule extends RuleBase {
   };
   state: PromAlertingRuleState;
   type: PromRuleType.Alerting;
+
+  /**
+   * Pending period in seconds, aka for. 0 or undefined means no pending period
+   */
+  duration?: number;
   totals?: Partial<Record<Lowercase<GrafanaAlertState>, number>>;
   totalsFiltered?: Partial<Record<Lowercase<GrafanaAlertState>, number>>;
   activeAt?: string; // ISO timestamp
@@ -86,7 +97,8 @@ export interface RulesSourceResult {
   namespaces?: RuleNamespace[];
 }
 
-export type RulesSource = DataSourceInstanceSettings | 'grafana';
+/** @deprecated use RulesSourceIdentifier instead */
+export type RulesSource = DataSourceInstanceSettings<PromOptions | LokiOptions> | 'grafana';
 
 // combined prom and ruler result
 export interface CombinedRule {
@@ -128,20 +140,64 @@ export interface CombinedRuleNamespace {
   rulesSource: RulesSource;
   name: string;
   groups: CombinedRuleGroup[];
+  uid?: string; //available only in grafana rules
 }
 
 export interface RuleWithLocation<T = RulerRuleDTO> {
   ruleSourceName: string;
   namespace: string;
+  namespace_uid?: string; // Grafana folder UID
   group: RulerRuleGroupDTO;
   rule: T;
 }
 
-export interface CombinedRuleWithLocation extends CombinedRule {
+export const GrafanaRulesSourceSymbol = Symbol('grafana');
+export type RulesSourceUid = string | typeof GrafanaRulesSourceSymbol;
+
+export interface ExternalRulesSourceIdentifier {
+  uid: string;
+  name: string;
+}
+export interface GrafanaRulesSourceIdentifier {
+  uid: typeof GrafanaRulesSourceSymbol;
+  name: typeof GRAFANA_RULES_SOURCE_NAME;
+}
+
+export type RulesSourceIdentifier = ExternalRulesSourceIdentifier | GrafanaRulesSourceIdentifier;
+
+/** @deprecated use RuleGroupIdentifierV2 instead */
+export interface RuleGroupIdentifier {
   dataSourceName: string;
+  /** ⚠️ use the Grafana folder UID for Grafana-managed rules */
   namespaceName: string;
   groupName: string;
 }
+
+export interface GrafanaNamespaceIdentifier {
+  uid: string;
+}
+
+export interface DataSourceNamespaceIdentifier {
+  name: string;
+}
+
+export interface GrafanaRuleGroupIdentifier {
+  rulesSource: GrafanaRulesSourceIdentifier;
+  groupName: string;
+  namespace: GrafanaNamespaceIdentifier;
+  groupOrigin: 'grafana';
+}
+
+export interface DataSourceRuleGroupIdentifier {
+  rulesSource: ExternalRulesSourceIdentifier;
+  groupName: string;
+  namespace: DataSourceNamespaceIdentifier;
+  groupOrigin: 'datasource';
+}
+
+export type RuleGroupIdentifierV2 = GrafanaRuleGroupIdentifier | DataSourceRuleGroupIdentifier;
+
+export type CombinedRuleWithLocation = CombinedRule & RuleGroupIdentifier;
 
 export interface PromRuleWithLocation {
   rule: AlertingRule;
@@ -171,7 +227,15 @@ export interface PrometheusRuleIdentifier {
   ruleHash: string;
 }
 
-export type RuleIdentifier = CloudRuleIdentifier | GrafanaRuleIdentifier | PrometheusRuleIdentifier;
+export type RuleIdentifier = EditableRuleIdentifier | PrometheusRuleIdentifier;
+
+/**
+ * This type is a union of all rule identifiers that should have a ruler API
+ *
+ * We do not support PrometheusRuleIdentifier because vanilla Prometheus has no ruler API
+ */
+export type EditableRuleIdentifier = CloudRuleIdentifier | GrafanaRuleIdentifier;
+
 export interface FilterState {
   queryString?: string;
   dataSource?: string;

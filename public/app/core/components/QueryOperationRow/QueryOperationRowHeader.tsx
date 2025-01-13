@@ -1,10 +1,11 @@
 import { css, cx } from '@emotion/css';
-import React, { MouseEventHandler } from 'react';
-import { DraggableProvided } from 'react-beautiful-dnd';
+import { DraggableProvided } from '@hello-pangea/dnd';
+import { MouseEventHandler } from 'react';
+import * as React from 'react';
 
 import { GrafanaTheme2 } from '@grafana/data';
-import { Stack } from '@grafana/experimental';
-import { IconButton, useStyles2 } from '@grafana/ui';
+import { Icon, IconButton, useStyles2, Stack } from '@grafana/ui';
+import { t } from 'app/core/internationalization';
 
 export interface QueryOperationRowHeaderProps {
   actionsElement?: React.ReactNode;
@@ -15,7 +16,7 @@ export interface QueryOperationRowHeaderProps {
   headerElement?: React.ReactNode;
   isContentVisible: boolean;
   onRowToggle: () => void;
-  reportDragMousePosition: MouseEventHandler<HTMLButtonElement>;
+  reportDragMousePosition: MouseEventHandler<HTMLDivElement>;
   title?: string;
   id: string;
   expanderMessages?: ExpanderMessages;
@@ -42,12 +43,16 @@ export const QueryOperationRowHeader = ({
 }: QueryOperationRowHeaderProps) => {
   const styles = useStyles2(getStyles);
 
-  let tooltipMessage = isContentVisible ? 'Collapse query row' : 'Expand query row';
+  let tooltipMessage = isContentVisible
+    ? t('query-operation.header.collapse-row', 'Collapse query row')
+    : t('query-operation.header.expand-row', 'Expand query row');
   if (expanderMessages !== undefined && isContentVisible) {
     tooltipMessage = expanderMessages.close;
   } else if (expanderMessages !== undefined) {
     tooltipMessage = expanderMessages?.open;
   }
+
+  const dragAndDropLabel = t('query-operation.header.drag-and-drop', 'Drag and drop to reorder');
 
   return (
     <div className={styles.header}>
@@ -73,19 +78,12 @@ export const QueryOperationRowHeader = ({
         {headerElement}
       </div>
 
-      <Stack gap={1} alignItems="center" wrap={false}>
+      <Stack gap={1} alignItems="center">
         {actionsElement}
         {draggable && (
-          <IconButton
-            title="Drag and drop to reorder"
-            name="draggabledots"
-            tooltip="Drag and drop to reorder"
-            tooltipPlacement="bottom"
-            size="lg"
-            className={styles.dragIcon}
-            onMouseMove={reportDragMousePosition}
-            {...dragHandleProps}
-          />
+          <div onMouseMove={reportDragMousePosition} {...dragHandleProps}>
+            <Icon title={dragAndDropLabel} name="draggabledots" size="lg" className={styles.dragIcon} />
+          </div>
         )}
       </Stack>
     </div>
@@ -93,58 +91,58 @@ export const QueryOperationRowHeader = ({
 };
 
 const getStyles = (theme: GrafanaTheme2) => ({
-  header: css`
-    label: Header;
-    padding: ${theme.spacing(0.5, 0.5)};
-    border-radius: ${theme.shape.radius.default};
-    background: ${theme.colors.background.secondary};
-    min-height: ${theme.spacing(4)};
-    display: grid;
-    grid-template-columns: minmax(100px, max-content) min-content;
-    align-items: center;
-    justify-content: space-between;
-    white-space: nowrap;
+  header: css({
+    label: 'Header',
+    padding: theme.spacing(0.5, 0.5),
+    borderRadius: theme.shape.radius.default,
+    background: theme.colors.background.secondary,
+    minHeight: theme.spacing(4),
+    display: 'grid',
+    gridTemplateColumns: 'minmax(100px, max-content) min-content',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    whiteSpace: 'nowrap',
 
-    &:focus {
-      outline: none;
-    }
-  `,
-  column: css`
-    label: Column;
-    display: flex;
-    align-items: center;
-  `,
-  dragIcon: css`
-    cursor: grab;
-    color: ${theme.colors.text.disabled};
-    margin: ${theme.spacing(0, 0.5)};
-    &:hover {
-      color: ${theme.colors.text};
-    }
-  `,
-  collapseIcon: css`
-    margin-left: ${theme.spacing(0.5)};
-    color: ${theme.colors.text.disabled};
-    }
-  `,
-  titleWrapper: css`
-    display: flex;
-    align-items: center;
-    flex-grow: 1;
-    cursor: pointer;
-    overflow: hidden;
-    margin-right: ${theme.spacing(0.5)};
-  `,
-  title: css`
-    font-weight: ${theme.typography.fontWeightBold};
-    color: ${theme.colors.text.link};
-    margin-left: ${theme.spacing(0.5)};
-    overflow: hidden;
-    text-overflow: ellipsis;
-  `,
-  disabled: css`
-    color: ${theme.colors.text.disabled};
-  `,
+    '&:focus': {
+      outline: 'none',
+    },
+  }),
+  column: css({
+    label: 'Column',
+    display: 'flex',
+    alignItems: 'center',
+    overflow: 'hidden',
+  }),
+  dragIcon: css({
+    cursor: 'grab',
+    color: theme.colors.text.disabled,
+    margin: theme.spacing(0, 0.5),
+    '&:hover': {
+      color: theme.colors.text.primary,
+    },
+  }),
+  collapseIcon: css({
+    marginLeft: theme.spacing(0.5),
+    color: theme.colors.text.disabled,
+  }),
+  titleWrapper: css({
+    display: 'flex',
+    alignItems: 'center',
+    flexGrow: 1,
+    cursor: 'pointer',
+    overflow: 'hidden',
+    marginRight: theme.spacing(0.5),
+  }),
+  title: css({
+    fontWeight: theme.typography.fontWeightBold,
+    color: theme.colors.text.link,
+    marginLeft: theme.spacing(0.5),
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  }),
+  disabled: css({
+    color: theme.colors.text.disabled,
+  }),
 });
 
 QueryOperationRowHeader.displayName = 'QueryOperationRowHeader';

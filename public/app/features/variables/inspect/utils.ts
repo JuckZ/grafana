@@ -4,7 +4,8 @@ import { mapSet } from 'app/core/utils/set';
 import { stringifyPanelModel } from 'app/features/dashboard/state/PanelModel';
 
 import { safeStringifyValue } from '../../../core/utils/explore';
-import { DashboardModel, PanelModel } from '../../dashboard/state';
+import { DashboardModel } from '../../dashboard/state/DashboardModel';
+import { PanelModel } from '../../dashboard/state/PanelModel';
 import { variableAdapters } from '../adapters';
 import { isAdHoc } from '../guard';
 import { VariableModel } from '../types';
@@ -60,10 +61,16 @@ export function getVariableName(expression: string) {
     return undefined;
   }
   const variableName = match.slice(1).find((match) => match !== undefined);
+
+  // ignore variables that match inherited object prop names
+  if (variableName! in {}) {
+    return undefined;
+  }
+
   return variableName;
 }
 
-export const getUnknownVariableStrings = (variables: VariableModel[], model: any) => {
+export const getUnknownVariableStrings = (variables: VariableModel[], model: DashboardModel) => {
   variableRegex.lastIndex = 0;
   const unknownVariableNames: string[] = [];
   const modelAsString = safeStringifyValue(model, 2);
@@ -336,7 +343,7 @@ export const transformUsagesToNetwork = (usages: VariableUsageTree[]): UsagesToN
 };
 
 const countLeaves = (object: object): number => {
-  const total = Object.values(object).reduce((count: number, value: any) => {
+  const total = Object.values(object).reduce<number>((count, value) => {
     if (typeof value === 'object') {
       return count + countLeaves(value);
     }

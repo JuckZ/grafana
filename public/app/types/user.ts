@@ -1,6 +1,8 @@
 import { SelectableValue, WithAccessControlMetadata } from '@grafana/data';
+import { Role } from 'app/types';
 
 import { OrgRole } from '.';
+
 export interface OrgUser extends WithAccessControlMetadata {
   avatarUrl: string;
   email: string;
@@ -10,7 +12,10 @@ export interface OrgUser extends WithAccessControlMetadata {
   name: string;
   orgId: number;
   role: OrgRole;
+  // RBAC roles
+  roles?: Role[];
   userId: number;
+  uid: string;
   isDisabled: boolean;
   authLabels?: string[];
   isExternallySynced?: boolean;
@@ -30,6 +35,7 @@ export type Unit = { name: string; url: string };
 
 export interface UserDTO extends WithAccessControlMetadata {
   id: number;
+  uid: string;
   login: string;
   email: string;
   name: string;
@@ -76,6 +82,7 @@ export interface UsersState {
   externalUserMngLinkName: string;
   externalUserMngInfo: string;
   isLoading: boolean;
+  rolesLoading?: boolean;
   page: number;
   perPage: number;
   totalPages: number;
@@ -90,6 +97,7 @@ export interface UserSession {
   seenAt: string;
   browser: string;
   browserVersion: string;
+  authModule?: string;
   os: string;
   osVersion: string;
   device: string;
@@ -124,5 +132,28 @@ export interface UserListAdminState {
   showPaging: boolean;
   filters: UserFilter[];
   isLoading: boolean;
+  sort?: string;
+}
+
+export interface UserAnonymousDeviceDTO {
+  login?: string;
+  clientIp: string;
+  deviceId: string;
+  userAgent: string;
+  updatedAt: string;
+  lastSeenAt: string;
+  avatarUrl?: string;
+}
+
+export type AnonUserFilter = Record<string, string | boolean | SelectableValue[]>;
+
+export interface UserListAnonymousDevicesState {
+  devices: UserAnonymousDeviceDTO[];
+  query: string;
+  perPage: number;
+  page: number;
+  totalPages: number;
+  showPaging: boolean;
+  filters: AnonUserFilter[];
   sort?: string;
 }

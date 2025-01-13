@@ -1,18 +1,19 @@
 import { css } from '@emotion/css';
 import { debounce } from 'lodash';
-import React, { useRef, useEffect } from 'react';
+import { useRef, useEffect } from 'react';
 import { useLatest } from 'react-use';
 import { v4 as uuidv4 } from 'uuid';
 
 import { GrafanaTheme2 } from '@grafana/data';
 import { selectors } from '@grafana/e2e-selectors';
+import { parser } from '@grafana/lezer-logql';
 import { languageConfiguration, monarchlanguage } from '@grafana/monaco-logql';
 import { useTheme2, ReactMonacoEditor, Monaco, monacoTypes, MonacoEditor } from '@grafana/ui';
 
 import { Props } from './MonacoQueryFieldProps';
 import { getOverrideServices } from './getOverrideServices';
-import { getCompletionProvider, getSuggestOptions } from './monaco-completion-provider';
 import { CompletionDataProvider } from './monaco-completion-provider/CompletionDataProvider';
+import { getCompletionProvider, getSuggestOptions } from './monaco-completion-provider/completionUtils';
 import { placeHolderScopedVars, validateQuery } from './monaco-completion-provider/validation';
 
 const options: monacoTypes.editor.IStandaloneEditorConstructionOptions = {
@@ -81,25 +82,34 @@ function ensureLogQL(monaco: Monaco) {
 
 const getStyles = (theme: GrafanaTheme2, placeholder: string) => {
   return {
-    container: css`
-      border-radius: ${theme.shape.radius.default};
-      border: 1px solid ${theme.components.input.borderColor};
-      width: 100%;
-      .monaco-editor .suggest-widget {
-        min-width: 50%;
-      }
-    `,
-    placeholder: css`
-      ::after {
-        content: '${placeholder}';
-        font-family: ${theme.typography.fontFamilyMonospace};
-        opacity: 0.3;
-      }
-    `,
+    container: css({
+      borderRadius: theme.shape.radius.default,
+      border: `1px solid ${theme.components.input.borderColor}`,
+      width: '100%',
+      '.monaco-editor .suggest-widget': {
+        minWidth: '50%',
+      },
+    }),
+    placeholder: css({
+      '::after': {
+        content: `'${placeholder}'`,
+        fontFamily: theme.typography.fontFamilyMonospace,
+        opacity: 0.3,
+      },
+    }),
   };
 };
 
-const MonacoQueryField = ({ history, onBlur, onRunQuery, initialValue, datasource, placeholder, onChange }: Props) => {
+const MonacoQueryField = ({
+  history,
+  onBlur,
+  onRunQuery,
+  initialValue,
+  datasource,
+  placeholder,
+  onChange,
+  timeRange,
+}: Props) => {
   const id = uuidv4();
   // we need only one instance of `overrideServices` during the lifetime of the react component
   const overrideServicesRef = useRef(getOverrideServices());
@@ -109,6 +119,7 @@ const MonacoQueryField = ({ history, onBlur, onRunQuery, initialValue, datasourc
   const historyRef = useLatest(history);
   const onRunQueryRef = useLatest(onRunQuery);
   const onBlurRef = useLatest(onBlur);
+  const completionDataProviderRef = useRef<CompletionDataProvider | null>(null);
 
   const autocompleteCleanupCallback = useRef<(() => void) | null>(null);
 
@@ -121,6 +132,12 @@ const MonacoQueryField = ({ history, onBlur, onRunQuery, initialValue, datasourc
       autocompleteCleanupCallback.current?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (completionDataProviderRef.current && timeRange) {
+      completionDataProviderRef.current.setTimeRange(timeRange);
+    }
+  }, [timeRange]);
 
   const setPlaceholder = (monaco: Monaco, editor: MonacoEditor) => {
     const placeholderDecorators = [
@@ -156,7 +173,7 @@ const MonacoQueryField = ({ history, onBlur, onRunQuery, initialValue, datasourc
 
   return (
     <div
-      aria-label={selectors.components.QueryField.container}
+      data-testid={selectors.components.QueryField.container}
       className={styles.container}
       // NOTE: we will be setting inline-style-width/height on this element
       ref={containerRef}
@@ -187,7 +204,8 @@ const MonacoQueryField = ({ history, onBlur, onRunQuery, initialValue, datasourc
               validateQuery(
                 query,
                 datasource.interpolateString(query, placeHolderScopedVars),
-                model.getLinesContent()
+                model.getLinesContent(),
+                parser
               ) || [];
 
             const markers = errors.map(({ error, ...boundary }) => ({
@@ -201,7 +219,8 @@ const MonacoQueryField = ({ history, onBlur, onRunQuery, initialValue, datasourc
             onTypeDebounced(query);
             monaco.editor.setModelMarkers(model, 'owner', markers);
           });
-          const dataProvider = new CompletionDataProvider(langProviderRef.current, historyRef);
+          const dataProvider = new CompletionDataProvider(langProviderRef.current, historyRef, timeRange);
+          completionDataProviderRef.current = dataProvider;
           const completionProvider = getCompletionProvider(monaco, dataProvider);
 
           // completion-providers in monaco are not registered directly to editor-instances,
@@ -252,6 +271,13 @@ const MonacoQueryField = ({ history, onBlur, onRunQuery, initialValue, datasourc
             },
             'isEditorFocused' + id
           );
+
+          // Fixes Monaco capturing the search key binding and displaying a useless search box within the Editor.
+          // See https://github.com/grafana/grafana/issues/85850
+          monaco.editor.addKeybindingRule({
+            keybinding: monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF,
+            command: null,
+          });
 
           editor.onDidFocusEditorText(() => {
             isEditorFocused.set(true);

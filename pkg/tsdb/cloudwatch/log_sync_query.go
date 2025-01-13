@@ -3,6 +3,7 @@ package cloudwatch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/grafana/grafana-plugin-sdk-go/data"
 	"github.com/grafana/grafana/pkg/tsdb/cloudwatch/kinds/dataquery"
 	"github.com/grafana/grafana/pkg/tsdb/cloudwatch/models"
+	"github.com/grafana/grafana/pkg/tsdb/cloudwatch/utils"
 )
 
 const initialAlertPollPeriod = time.Second
@@ -21,7 +23,8 @@ var executeSyncLogQuery = func(ctx context.Context, e *cloudWatchExecutor, req *
 
 	instance, err := e.getInstance(ctx, req.PluginContext)
 	if err != nil {
-		return nil, err
+		resp.Responses[req.Queries[0].RefID] = backend.ErrorResponseWithErrorSource(err)
+		return resp, nil
 	}
 
 	for _, q := range req.Queries {
@@ -36,9 +39,9 @@ var executeSyncLogQuery = func(ctx context.Context, e *cloudWatchExecutor, req *
 			logsQuery.QueryString = *logsQuery.Expression
 		}
 
-		region := logsQuery.Region
-		if logsQuery.Region == "" || region == defaultRegion {
-			logsQuery.Region = instance.Settings.Region
+		region := utils.Depointerizer(logsQuery.Region)
+		if region == "" || region == defaultRegion {
+			logsQuery.Region = utils.Pointer(instance.Settings.Region)
 		}
 
 		logsClient, err := e.getCWLogsClient(ctx, req.PluginContext, region)
@@ -46,7 +49,17 @@ var executeSyncLogQuery = func(ctx context.Context, e *cloudWatchExecutor, req *
 			return nil, err
 		}
 
+		refId := "A"
+		if q.RefID != "" {
+			refId = q.RefID
+		}
+
 		getQueryResultsOutput, err := e.syncQuery(ctx, logsClient, q, logsQuery, instance.Settings.LogsTimeout.Duration)
+		var sourceError backend.ErrorWithSource
+		if errors.As(err, &sourceError) {
+			resp.Responses[refId] = backend.ErrorResponseWithErrorSource(sourceError)
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -64,11 +77,6 @@ var executeSyncLogQuery = func(ctx context.Context, e *cloudWatchExecutor, req *
 			}
 		} else {
 			frames = data.Frames{dataframe}
-		}
-
-		refId := "A"
-		if q.RefID != "" {
-			refId = q.RefID
 		}
 
 		respD := resp.Responses[refId]
@@ -108,7 +116,7 @@ func (e *cloudWatchExecutor) syncQuery(ctx context.Context, logsClient cloudwatc
 	for range ticker.C {
 		res, err := e.executeGetQueryResults(ctx, logsClient, requestParams)
 		if err != nil {
-			return nil, fmt.Errorf("CloudWatch Error: %w", err)
+			return nil, err
 		}
 		if isTerminated(*res.Status) {
 			return res, err

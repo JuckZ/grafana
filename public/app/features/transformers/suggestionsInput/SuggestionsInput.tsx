@@ -1,13 +1,20 @@
 import { css } from '@emotion/css';
-import React, { FormEvent, useEffect, useRef, useState } from 'react';
-import { Popper as ReactPopper } from 'react-popper';
+import { autoUpdate, flip, shift, useFloating } from '@floating-ui/react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import * as React from 'react';
 
 import { GrafanaTheme2, VariableSuggestion } from '@grafana/data';
-import { CustomScrollbar, FieldValidationMessage, Input, Portal, useTheme2 } from '@grafana/ui';
+import { FieldValidationMessage, Portal, ScrollContainer, TextArea, useTheme2 } from '@grafana/ui';
 import { DataLinkSuggestions } from '@grafana/ui/src/components/DataLinks/DataLinkSuggestions';
+import { Input } from '@grafana/ui/src/components/Input/Input';
 
 const modulo = (a: number, n: number) => a - n * Math.floor(a / n);
 const ERROR_TOOLTIP_OFFSET = 8;
+
+export enum HTMLElementType {
+  InputElement = 'input',
+  TextAreaElement = 'textarea',
+}
 
 interface SuggestionsInputProps {
   value?: string | number;
@@ -17,6 +24,9 @@ interface SuggestionsInputProps {
   invalid?: boolean;
   error?: string;
   width?: number;
+  type?: HTMLElementType;
+  style?: React.CSSProperties;
+  autoFocus?: boolean;
 }
 
 const getStyles = (theme: GrafanaTheme2, inputHeight: number) => {
@@ -44,10 +54,14 @@ export const SuggestionsInput = ({
   placeholder,
   error,
   invalid,
+  type = HTMLElementType.InputElement,
+  style,
+  autoFocus = false,
 }: SuggestionsInputProps) => {
   const [showingSuggestions, setShowingSuggestions] = useState(false);
   const [suggestionsIndex, setSuggestionsIndex] = useState(0);
   const [variableValue, setVariableValue] = useState<string>(value.toString());
+  const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [inputHeight, setInputHeight] = useState<number>(0);
   const [startPos, setStartPos] = useState<number>(0);
@@ -55,7 +69,40 @@ export const SuggestionsInput = ({
   const theme = useTheme2();
   const styles = getStyles(theme, inputHeight);
 
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>();
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo(0, scrollTop);
+  }, [scrollTop]);
+
+  // the order of middleware is important!
+  const middleware = [
+    flip({
+      fallbackAxisSideDirection: 'start',
+      // see https://floating-ui.com/docs/flip#combining-with-shift
+      crossAxis: false,
+      boundary: document.body,
+    }),
+    shift(),
+  ];
+
+  const { refs, floatingStyles } = useFloating({
+    open: showingSuggestions,
+    placement: 'bottom-start',
+    onOpenChange: setShowingSuggestions,
+    middleware,
+    whileElementsMounted: autoUpdate,
+    strategy: 'fixed',
+  });
+
+  const handleRef = useCallback(
+    (ref: HTMLInputElement | HTMLTextAreaElement) => {
+      refs.setReference(ref);
+
+      inputRef.current = ref;
+    },
+    [refs]
+  );
 
   // Used to get the height of the suggestion elements in order to scroll to them.
   const activeRef = useRef<HTMLDivElement>(null);
@@ -71,7 +118,7 @@ export const SuggestionsInput = ({
       if (x[startPos - 1] === '$') {
         input.value = x.slice(0, startPos) + item.value + x.slice(curPos);
       } else {
-        input.value = x.slice(0, startPos) + '$' + item.value + x.slice(curPos);
+        input.value = x.slice(0, startPos) + '$' + `{${item.value}}` + x.slice(curPos);
       }
 
       setVariableValue(input.value);
@@ -118,12 +165,12 @@ export const SuggestionsInput = ({
     [showingSuggestions, suggestions, suggestionsIndex, onVariableSelect]
   );
 
-  const onValueChanged = React.useCallback((event: FormEvent<HTMLInputElement>) => {
+  const onValueChanged = React.useCallback((event: FormEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setVariableValue(event.currentTarget.value);
   }, []);
 
   const onBlur = React.useCallback(
-    (event: FormEvent<HTMLInputElement>) => {
+    (event: FormEvent<HTMLInputElement | HTMLTextAreaElement>) => {
       onChange(event.currentTarget.value);
     },
     [onChange]
@@ -133,57 +180,38 @@ export const SuggestionsInput = ({
     setInputHeight(inputRef.current!.clientHeight);
   }, []);
 
+  const inputProps = {
+    placeholder,
+    invalid,
+    value: variableValue,
+    onChange: onValueChanged,
+    onBlur: onBlur,
+    onKeyDown: onKeyDown,
+  };
+
   return (
-    <div className={styles.inputWrapper}>
+    <div className={styles.inputWrapper} style={style ?? {}}>
       {showingSuggestions && (
         <Portal>
-          <ReactPopper
-            referenceElement={inputRef.current!}
-            placement="bottom-start"
-            modifiers={[
-              {
-                name: 'preventOverflow',
-                enabled: true,
-                options: {
-                  rootBoundary: 'viewport',
-                },
-              },
-              {
-                name: 'arrow',
-                enabled: false,
-              },
-              {
-                name: 'offset',
-                options: {
-                  offset: [0, 0],
-                },
-              },
-            ]}
-          >
-            {({ ref, style, placement }) => {
-              return (
-                <div ref={ref} style={style} data-placement={placement} className={styles.suggestionsWrapper}>
-                  <CustomScrollbar
-                    scrollTop={scrollTop}
-                    autoHeightMax="300px"
-                    setScrollTop={({ scrollTop }) => setScrollTop(scrollTop)}
-                  >
-                    {/* This suggestion component has a specialized name,
-                          but is rather generalistic in implementation,
-                          so we're using it in transformations also. 
-                          We should probably rename this to something more general. */}
-                    <DataLinkSuggestions
-                      activeRef={activeRef}
-                      suggestions={suggestions}
-                      onSuggestionSelect={onVariableSelect}
-                      onClose={() => setShowingSuggestions(false)}
-                      activeIndex={suggestionsIndex}
-                    />
-                  </CustomScrollbar>
-                </div>
-              );
-            }}
-          </ReactPopper>
+          <div ref={refs.setFloating} style={floatingStyles} className={styles.suggestionsWrapper}>
+            <ScrollContainer
+              maxHeight="300px"
+              onScroll={(event) => setScrollTop(event.currentTarget.scrollTop ?? 0)}
+              ref={scrollRef}
+            >
+              {/* This suggestion component has a specialized name,
+                    but is rather generalistic in implementation,
+                    so we're using it in transformations also.
+                    We should probably rename this to something more general. */}
+              <DataLinkSuggestions
+                activeRef={activeRef}
+                suggestions={suggestions}
+                onSuggestionSelect={onVariableSelect}
+                onClose={() => setShowingSuggestions(false)}
+                activeIndex={suggestionsIndex}
+              />
+            </ScrollContainer>
+          </div>
         </Portal>
       )}
       {invalid && error && (
@@ -191,15 +219,16 @@ export const SuggestionsInput = ({
           <FieldValidationMessage>{error}</FieldValidationMessage>
         </div>
       )}
-      <Input
-        placeholder={placeholder}
-        invalid={invalid}
-        ref={inputRef}
-        value={variableValue}
-        onChange={onValueChanged}
-        onBlur={onBlur}
-        onKeyDown={onKeyDown}
-      />
+      {type === HTMLElementType.InputElement ? (
+        <Input {...inputProps} ref={handleRef as unknown as React.RefObject<HTMLInputElement>} autoFocus={autoFocus} />
+      ) : (
+        <TextArea
+          {...inputProps}
+          ref={handleRef as unknown as React.RefObject<HTMLTextAreaElement>}
+          autoFocus={autoFocus}
+          rows={5}
+        />
+      )}
     </div>
   );
 };

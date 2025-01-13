@@ -8,11 +8,9 @@ import (
 	"github.com/grafana/grafana/pkg/infra/log"
 	"github.com/grafana/grafana/pkg/services/dashboards"
 	"github.com/grafana/grafana/pkg/services/featuremgmt"
-	"github.com/grafana/grafana/pkg/services/org"
 	"github.com/grafana/grafana/pkg/services/publicdashboards"
 	. "github.com/grafana/grafana/pkg/services/publicdashboards/models"
 	"github.com/grafana/grafana/pkg/services/sqlstore"
-	"github.com/grafana/grafana/pkg/services/sqlstore/searchstore"
 	"github.com/grafana/grafana/pkg/setting"
 )
 
@@ -42,7 +40,7 @@ func ProvideStore(sqlStore db.DB, cfg *setting.Cfg, features featuremgmt.Feature
 }
 
 // FindAllWithPagination Returns a list of public dashboards by orgId, based on permissions and with pagination
-func (d *PublicDashboardStoreImpl) FindAllWithPagination(ctx context.Context, query *PublicDashboardListQuery) (*PublicDashboardListResponseWithPagination, error) {
+func (d *PublicDashboardStoreImpl) FindAll(ctx context.Context, query *PublicDashboardListQuery) (*PublicDashboardListResponseWithPagination, error) {
 	resp := &PublicDashboardListResponseWithPagination{
 		PublicDashboards: make([]*PublicDashboardListResponse, 0),
 		TotalCount:       0,
@@ -54,24 +52,14 @@ func (d *PublicDashboardStoreImpl) FindAllWithPagination(ctx context.Context, qu
 	}
 
 	pubdashBuilder := db.NewSqlBuilder(d.cfg, d.features, d.sqlStore.GetDialect(), recursiveQueriesAreSupported)
-	pubdashBuilder.Write("SELECT dashboard_public.uid, dashboard_public.access_token, dashboard.uid as dashboard_uid, dashboard_public.is_enabled, dashboard.title")
+	pubdashBuilder.Write("SELECT uid, access_token, dashboard_uid, is_enabled")
 	pubdashBuilder.Write(" FROM dashboard_public")
-	pubdashBuilder.Write(" JOIN dashboard ON dashboard.uid = dashboard_public.dashboard_uid AND dashboard.org_id = dashboard_public.org_id")
-	pubdashBuilder.Write(` WHERE dashboard_public.org_id = ?`, query.OrgID)
-	if query.User.OrgRole != org.RoleAdmin {
-		pubdashBuilder.WriteDashboardPermissionFilter(query.User, dashboards.PERMISSION_VIEW, searchstore.TypeDashboard)
-	}
-	pubdashBuilder.Write(" ORDER BY dashboard.title")
-	pubdashBuilder.Write(d.sqlStore.GetDialect().LimitOffset(int64(query.Limit), int64(query.Offset)))
+	pubdashBuilder.Write(` WHERE org_id = ?`, query.OrgID)
 
 	counterBuilder := db.NewSqlBuilder(d.cfg, d.features, d.sqlStore.GetDialect(), recursiveQueriesAreSupported)
 	counterBuilder.Write("SELECT COUNT(*)")
 	counterBuilder.Write(" FROM dashboard_public")
-	counterBuilder.Write(" JOIN dashboard ON dashboard.uid = dashboard_public.dashboard_uid AND dashboard.org_id = dashboard_public.org_id")
-	counterBuilder.Write(` WHERE dashboard_public.org_id = ?`, query.OrgID)
-	if query.User.OrgRole != org.RoleAdmin {
-		counterBuilder.WriteDashboardPermissionFilter(query.User, dashboards.PERMISSION_VIEW, searchstore.TypeDashboard)
-	}
+	counterBuilder.Write(` WHERE org_id = ?`, query.OrgID)
 
 	err = d.sqlStore.WithDbSession(ctx, func(sess *db.Session) error {
 		err := sess.SQL(pubdashBuilder.GetSQLString(), pubdashBuilder.GetParams()...).Find(&resp.PublicDashboards)
@@ -88,28 +76,6 @@ func (d *PublicDashboardStoreImpl) FindAllWithPagination(ctx context.Context, qu
 	}
 
 	return resp, nil
-}
-
-// FindDashboard returns a dashboard by orgId and dashboardUid
-func (d *PublicDashboardStoreImpl) FindDashboard(ctx context.Context, orgId int64, dashboardUid string) (*dashboards.Dashboard, error) {
-	dashboard := &dashboards.Dashboard{OrgID: orgId, UID: dashboardUid}
-
-	var found bool
-	err := d.sqlStore.WithDbSession(ctx, func(sess *db.Session) error {
-		var err error
-		found, err = sess.Get(dashboard)
-		return err
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	if !found {
-		return nil, nil
-	}
-
-	return dashboard, nil
 }
 
 // Find Returns public dashboard by Uid or nil if not found
@@ -304,15 +270,11 @@ func (d *PublicDashboardStoreImpl) Delete(ctx context.Context, uid string) (int6
 	return affectedRows, err
 }
 
-func (d *PublicDashboardStoreImpl) FindByDashboardFolder(ctx context.Context, dashboard *dashboards.Dashboard) ([]*PublicDashboard, error) {
-	if dashboard == nil || !dashboard.IsFolder {
-		return nil, nil
-	}
-
+func (d *PublicDashboardStoreImpl) FindByFolder(ctx context.Context, orgId int64, folderUid string) ([]*PublicDashboard, error) {
 	var pubdashes []*PublicDashboard
 
 	err := d.sqlStore.WithDbSession(ctx, func(sess *sqlstore.DBSession) error {
-		return sess.SQL("SELECT * from dashboard_public WHERE (dashboard_uid, org_id) IN (SELECT uid, org_id FROM dashboard WHERE folder_id = ?)", dashboard.ID).Find(&pubdashes)
+		return sess.SQL("SELECT * from dashboard_public WHERE (dashboard_uid, org_id) IN (SELECT uid, org_id FROM dashboard WHERE org_id = ? AND folder_uid = ?)", orgId, folderUid).Find(&pubdashes)
 	})
 	if err != nil {
 		return nil, err

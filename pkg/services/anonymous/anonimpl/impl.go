@@ -2,16 +2,22 @@ package anonimpl
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
+	"github.com/grafana/grafana/pkg/api/routing"
+	"github.com/grafana/grafana/pkg/infra/db"
 	"github.com/grafana/grafana/pkg/infra/localcache"
 	"github.com/grafana/grafana/pkg/infra/log"
 	"github.com/grafana/grafana/pkg/infra/network"
 	"github.com/grafana/grafana/pkg/infra/serverlock"
 	"github.com/grafana/grafana/pkg/infra/usagestats"
+	"github.com/grafana/grafana/pkg/services/accesscontrol"
 	"github.com/grafana/grafana/pkg/services/anonymous"
 	"github.com/grafana/grafana/pkg/services/anonymous/anonimpl/anonstore"
+	"github.com/grafana/grafana/pkg/services/anonymous/anonimpl/api"
+	"github.com/grafana/grafana/pkg/services/anonymous/validator"
 	"github.com/grafana/grafana/pkg/services/authn"
 	"github.com/grafana/grafana/pkg/services/org"
 	"github.com/grafana/grafana/pkg/setting"
@@ -23,21 +29,26 @@ const deviceIDHeader = "X-Grafana-Device-Id"
 const keepFor = time.Hour * 24 * 61
 
 type AnonDeviceService struct {
-	log        log.Logger
-	localCache *localcache.CacheService
-	anonStore  anonstore.AnonStore
-	serverLock *serverlock.ServerLockService
+	log            log.Logger
+	localCache     *localcache.CacheService
+	anonStore      anonstore.AnonStore
+	serverLock     *serverlock.ServerLockService
+	cfg            *setting.Cfg
+	limitValidator validator.AnonUserLimitValidator
 }
 
 func ProvideAnonymousDeviceService(usageStats usagestats.Service, authBroker authn.Service,
-	anonStore anonstore.AnonStore, cfg *setting.Cfg, orgService org.Service,
-	serverLockService *serverlock.ServerLockService,
+	sqlStore db.DB, cfg *setting.Cfg, orgService org.Service,
+	serverLockService *serverlock.ServerLockService, accesscontrol accesscontrol.AccessControl, routeRegister routing.RouteRegister,
+	validator validator.AnonUserLimitValidator,
 ) *AnonDeviceService {
 	a := &AnonDeviceService{
-		log:        log.New("anonymous-session-service"),
-		localCache: localcache.New(29*time.Minute, 15*time.Minute),
-		anonStore:  anonStore,
-		serverLock: serverLockService,
+		log:            log.New("anonymous-session-service"),
+		localCache:     localcache.New(29*time.Minute, 15*time.Minute),
+		anonStore:      anonstore.ProvideAnonDBStore(sqlStore, cfg.Anonymous.DeviceLimit),
+		serverLock:     serverLockService,
+		cfg:            cfg,
+		limitValidator: validator,
 	}
 
 	usageStats.RegisterMetricsFunc(a.usageStatFn)
@@ -49,10 +60,13 @@ func ProvideAnonymousDeviceService(usageStats usagestats.Service, authBroker aut
 		anonDeviceService: a,
 	}
 
-	if anonClient.cfg.AnonymousEnabled {
+	if cfg.Anonymous.Enabled {
 		authBroker.RegisterClient(anonClient)
 		authBroker.RegisterPostLoginHook(a.untagDevice, 100)
 	}
+
+	anonAPI := api.NewAnonDeviceServiceAPI(cfg, a.anonStore, accesscontrol, routeRegister)
+	anonAPI.RegisterAPIEndpoints()
 
 	return a
 }
@@ -70,28 +84,41 @@ func (a *AnonDeviceService) usageStatFn(ctx context.Context) (map[string]any, er
 	}, nil
 }
 
-func (a *AnonDeviceService) tagDeviceUI(ctx context.Context, httpReq *http.Request, device *anonstore.Device) error {
+func (a *AnonDeviceService) tagDeviceUI(ctx context.Context, device *anonstore.Device) error {
+	err := a.limitValidator.Validate(ctx)
+	if err != nil {
+		return err
+	}
+
 	key := device.CacheKey()
 
-	if _, ok := a.localCache.Get(key); ok {
+	if val, ok := a.localCache.Get(key); ok {
+		if boolVal, ok := val.(bool); ok && !boolVal {
+			return anonstore.ErrDeviceLimitReached
+		}
 		return nil
 	}
 
-	a.localCache.SetDefault(key, struct{}{})
+	a.localCache.SetDefault(key, true)
 
-	if setting.Env == setting.Dev {
+	if a.cfg.Env == setting.Dev {
 		a.log.Debug("Tagging device for UI", "deviceID", device.DeviceID, "device", device, "key", key)
 	}
 
 	if err := a.anonStore.CreateOrUpdateDevice(ctx, device); err != nil {
+		if errors.Is(err, anonstore.ErrDeviceLimitReached) {
+			a.localCache.SetDefault(key, false)
+			return err
+		}
+		// invalidate cache if there is an error
+		a.localCache.Delete(key)
 		return err
 	}
 
 	return nil
 }
 
-func (a *AnonDeviceService) untagDevice(ctx context.Context,
-	identity *authn.Identity, r *authn.Request, err error) {
+func (a *AnonDeviceService) untagDevice(ctx context.Context, _ *authn.Identity, r *authn.Request, err error) {
 	if err != nil {
 		return
 	}
@@ -103,11 +130,10 @@ func (a *AnonDeviceService) untagDevice(ctx context.Context,
 
 	errD := a.anonStore.DeleteDevice(ctx, deviceID)
 	if errD != nil {
-		a.log.Debug("Failed to untag device", "error", err)
+		a.log.Debug("Failed to untag device", "error", errD)
 	}
 }
 
-// FIXME: Unexport and remove interface
 func (a *AnonDeviceService) TagDevice(ctx context.Context, httpReq *http.Request, kind anonymous.DeviceKind) error {
 	deviceID := httpReq.Header.Get(deviceIDHeader)
 	if deviceID == "" {
@@ -134,12 +160,41 @@ func (a *AnonDeviceService) TagDevice(ctx context.Context, httpReq *http.Request
 		UpdatedAt: time.Now(),
 	}
 
-	err = a.tagDeviceUI(ctx, httpReq, taggedDevice)
+	err = a.tagDeviceUI(ctx, taggedDevice)
 	if err != nil {
 		a.log.Debug("Failed to tag device for UI", "error", err)
+		return err
 	}
 
 	return nil
+}
+
+// ListDevices returns all devices that have been updated between the given times.
+func (a *AnonDeviceService) ListDevices(ctx context.Context, from *time.Time, to *time.Time) ([]*anonstore.Device, error) {
+	if !a.cfg.Anonymous.Enabled {
+		a.log.Debug("Anonymous access is disabled, returning empty result")
+		return []*anonstore.Device{}, nil
+	}
+
+	return a.anonStore.ListDevices(ctx, from, to)
+}
+
+// CountDevices returns the number of devices that have been updated between the given times.
+func (a *AnonDeviceService) CountDevices(ctx context.Context, from time.Time, to time.Time) (int64, error) {
+	if !a.cfg.Anonymous.Enabled {
+		a.log.Debug("Anonymous access is disabled, returning empty result")
+		return 0, nil
+	}
+
+	return a.anonStore.CountDevices(ctx, from, to)
+}
+
+func (a *AnonDeviceService) SearchDevices(ctx context.Context, query *anonstore.SearchDeviceQuery) (*anonstore.SearchDeviceQueryResult, error) {
+	if !a.cfg.Anonymous.Enabled {
+		a.log.Debug("Anonymous access is disabled, returning empty result")
+		return nil, nil
+	}
+	return a.anonStore.SearchDevices(ctx, query)
 }
 
 func (a *AnonDeviceService) Run(ctx context.Context) error {

@@ -1,14 +1,18 @@
 import { NavModelItem } from '@grafana/data';
-import { config } from '@grafana/runtime';
 
 import { Breadcrumb } from './types';
 
-export function buildBreadcrumbs(sectionNav: NavModelItem, pageNav?: NavModelItem, homeNav?: NavModelItem) {
+export function buildBreadcrumbs(
+  sectionNav: NavModelItem,
+  pageNav?: NavModelItem,
+  homeNav?: NavModelItem,
+  skipHome?: boolean
+) {
   const crumbs: Breadcrumb[] = [];
   let foundHome = false;
   let lastPath: string | undefined = undefined;
 
-  function addCrumbs(node: NavModelItem) {
+  function addCrumbs(node: NavModelItem, shouldDedupe = false) {
     if (foundHome) {
       return;
     }
@@ -16,27 +20,36 @@ export function buildBreadcrumbs(sectionNav: NavModelItem, pageNav?: NavModelIte
     // construct the URL to match
     const urlParts = node.url?.split('?') ?? ['', ''];
     let urlToMatch = urlParts[0];
-
-    if (config.featureToggles.dockedMegaMenu) {
-      const urlSearchParams = new URLSearchParams(urlParts[1]);
-      if (urlSearchParams.has('editview')) {
-        urlToMatch += `?editview=${urlSearchParams.get('editview')}`;
-      }
+    const urlSearchParams = new URLSearchParams(urlParts[1]);
+    if (urlSearchParams.has('editview')) {
+      urlToMatch += `?editview=${urlSearchParams.get('editview')}`;
     }
 
     // Check if we found home/root if if so return early
     if (homeNav && urlToMatch === homeNav.url) {
-      crumbs.unshift({ text: homeNav.text, href: node.url ?? '' });
+      if (!skipHome) {
+        crumbs.unshift({ text: homeNav.text, href: node.url ?? '' });
+      }
       foundHome = true;
       return;
     }
 
-    // This enabled app plugins to control breadcrumbs of their root pages
     const isSamePathAsLastBreadcrumb = urlToMatch.length > 0 && lastPath === urlToMatch;
+
     // Remember this path for the next breadcrumb
     lastPath = urlToMatch;
 
-    if (!node.hideFromBreadcrumbs && !isSamePathAsLastBreadcrumb) {
+    const shouldAddCrumb = !node.hideFromBreadcrumbs && !(shouldDedupe && isSamePathAsLastBreadcrumb);
+
+    if (shouldAddCrumb) {
+      const activeChildIndex = node.children?.findIndex((child) => child.active) ?? -1;
+      // Add tab to breadcrumbs if it's not the first active child
+      if (activeChildIndex > 0) {
+        const activeChild = node.children?.[activeChildIndex];
+        if (activeChild) {
+          crumbs.unshift({ text: activeChild.text, href: activeChild.url ?? '' });
+        }
+      }
       crumbs.unshift({ text: node.text, href: node.url ?? '' });
     }
 
@@ -49,7 +62,8 @@ export function buildBreadcrumbs(sectionNav: NavModelItem, pageNav?: NavModelIte
     addCrumbs(pageNav);
   }
 
-  addCrumbs(sectionNav);
+  // shouldDedupe = true enables app plugins to control breadcrumbs of their root pages
+  addCrumbs(sectionNav, true);
 
   return crumbs;
 }

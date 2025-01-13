@@ -1,32 +1,33 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { OrgRole } from '@grafana/data';
 import { selectors as e2eSelectors } from '@grafana/e2e-selectors';
+import { config } from '@grafana/runtime';
 import {
-  Button,
-  ConfirmModal,
-  Icon,
-  Tooltip,
-  CellProps,
-  Tag,
-  InteractiveTable,
-  Column,
-  FetchDataFunc,
-  Pagination,
   Avatar,
   Box,
+  Button,
+  CellProps,
+  Column,
+  ConfirmModal,
+  FetchDataFunc,
+  Icon,
+  InteractiveTable,
+  Pagination,
+  Stack,
+  Tag,
+  Text,
+  Tooltip,
 } from '@grafana/ui';
-import { Flex, Stack } from '@grafana/ui/src/unstable';
 import { UserRolePicker } from 'app/core/components/RolePicker/UserRolePicker';
-import { fetchRoleOptions } from 'app/core/components/RolePicker/api';
+import { fetchRoleOptions, updateUserRoles } from 'app/core/components/RolePicker/api';
+import { RolePickerBadges } from 'app/core/components/RolePickerDrawer/RolePickerBadges';
 import { TagBadge } from 'app/core/components/TagFilter/TagBadge';
-import config from 'app/core/config';
 import { contextSrv } from 'app/core/core';
+import { Trans } from 'app/core/internationalization';
 import { AccessControlAction, OrgUser, Role } from 'app/types';
 
 import { OrgRolePicker } from '../OrgRolePicker';
-
-import { TableWrapper } from './TableWrapper';
 
 type Cell<T extends keyof OrgUser = keyof OrgUser> = CellProps<OrgUser, OrgUser[T]>;
 
@@ -34,16 +35,8 @@ const disabledRoleMessage = `This user's role is not editable because it is sync
 Refer to the Grafana authentication docs for details.`;
 
 const getBasicRoleDisabled = (user: OrgUser) => {
-  let basicRoleDisabled = !contextSrv.hasPermissionInMetadata(AccessControlAction.OrgUsersWrite, user);
-  let authLabel = Array.isArray(user.authLabels) && user.authLabels.length > 0 ? user.authLabels[0] : '';
-  // A GCom specific feature toggle for role locking has been introduced, as the previous implementation had a bug with locking down external users synced through GCom (https://github.com/grafana/grafana/pull/72044)
-  // Remove this conditional once FlagGcomOnlyExternalOrgRoleSync feature toggle has been removed
-  if (authLabel !== 'grafana.com' || config.featureToggles.gcomOnlyExternalOrgRoleSync) {
-    const isUserSynced = user?.isExternallySynced;
-    basicRoleDisabled = isUserSynced || basicRoleDisabled;
-  }
-
-  return basicRoleDisabled;
+  const isUserSynced = user?.isExternallySynced;
+  return !contextSrv.hasPermissionInMetadata(AccessControlAction.OrgUsersWrite, user) || isUserSynced;
 };
 
 const selectors = e2eSelectors.pages.UserListPage.UsersListPage;
@@ -57,17 +50,21 @@ export interface Props {
   changePage: (page: number) => void;
   page: number;
   totalPages: number;
+  rolesLoading?: boolean;
+  onUserRolesChange?: () => void;
 }
 
 export const OrgUsersTable = ({
   users,
   orgId,
   onRoleChange,
+  onUserRolesChange,
   onRemoveUser,
   fetchData,
   changePage,
   page,
   totalPages,
+  rolesLoading,
 }: Props) => {
   const [userToRemove, setUserToRemove] = useState<OrgUser | null>(null);
   const [roleOptions, setRoleOptions] = useState<Role[]>([]);
@@ -116,7 +113,23 @@ export const OrgUsersTable = ({
       {
         id: 'lastSeenAtAge',
         header: 'Last active',
-        cell: ({ cell: { value } }: Cell<'lastSeenAtAge'>) => value,
+        cell: ({ cell: { value } }: Cell<'lastSeenAtAge'>) => {
+          return (
+            <>
+              {value && (
+                <>
+                  {value === '10 years' ? (
+                    <Text color={'disabled'}>
+                      <Trans i18nKey="admin.org-uers.last-seen-never">Never</Trans>
+                    </Text>
+                  ) : (
+                    value
+                  )}
+                </>
+              )}
+            </>
+          );
+        },
         sortType: (a, b) => new Date(a.original.lastSeenAt).getTime() - new Date(b.original.lastSeenAt).getTime(),
       },
       {
@@ -124,9 +137,24 @@ export const OrgUsersTable = ({
         header: 'Role',
         cell: ({ cell: { value }, row: { original } }: Cell<'role'>) => {
           const basicRoleDisabled = getBasicRoleDisabled(original);
+          const onUserRolesUpdate = async (newRoles: Role[], userId: number, orgId: number | undefined) => {
+            await updateUserRoles(newRoles, userId, orgId);
+            if (onUserRolesChange) {
+              onUserRolesChange();
+            }
+          };
+
+          if (config.featureToggles.rolePickerDrawer) {
+            return <RolePickerBadges disabled={basicRoleDisabled} user={original} />;
+          }
+
           return contextSrv.licensedAccessControlEnabled() ? (
             <UserRolePicker
               userId={original.userId}
+              roles={original.roles}
+              apply={true}
+              onApplyRoles={onUserRolesUpdate}
+              isLoading={rolesLoading}
               orgId={orgId}
               roleOptions={roleOptions}
               basicRole={value}
@@ -157,18 +185,20 @@ export const OrgUsersTable = ({
                   interactive={true}
                   content={
                     <div>
-                      This user&apos;s role is not editable because it is synchronized from your auth provider. Refer to
-                      the&nbsp;
-                      <a
-                        href={
-                          'https://grafana.com/docs/grafana/latest/administration/user-management/manage-org-users/#change-a-users-organization-permissions'
-                        }
-                        rel="noreferrer"
-                        target="_blank"
-                      >
-                        Grafana authentication docs
-                      </a>
-                      &nbsp;for details.
+                      <Trans i18nKey="admin.org-users.not-editable">
+                        This user&apos;s role is not editable because it is synchronized from your auth provider. Refer
+                        to the&nbsp;
+                        <a
+                          href={
+                            'https://grafana.com/docs/grafana/latest/administration/user-management/manage-org-users/#change-a-users-organization-permissions'
+                          }
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          Grafana authentication docs
+                        </a>
+                        &nbsp;for details.
+                      </Trans>
                     </div>
                   }
                 >
@@ -211,22 +241,15 @@ export const OrgUsersTable = ({
         },
       },
     ],
-    [orgId, roleOptions, onRoleChange]
+    [rolesLoading, orgId, roleOptions, onUserRolesChange, onRoleChange]
   );
 
   return (
-    <Stack gap={2} data-testid={selectors.container}>
-      <TableWrapper>
-        <InteractiveTable
-          columns={columns}
-          data={users}
-          getRowId={(user) => String(user.userId)}
-          fetchData={fetchData}
-        />
-        <Flex justifyContent="flex-end">
-          <Pagination onNavigate={changePage} currentPage={page} numberOfPages={totalPages} hideWhenSinglePage={true} />
-        </Flex>
-      </TableWrapper>
+    <Stack direction={'column'} gap={2} data-testid={selectors.container}>
+      <InteractiveTable columns={columns} data={users} getRowId={(user) => String(user.userId)} fetchData={fetchData} />
+      <Stack justifyContent="flex-end">
+        <Pagination onNavigate={changePage} currentPage={page} numberOfPages={totalPages} hideWhenSinglePage={true} />
+      </Stack>
       {Boolean(userToRemove) && (
         <ConfirmModal
           body={`Are you sure you want to delete user ${userToRemove?.login}?`}

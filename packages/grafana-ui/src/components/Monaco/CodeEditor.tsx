@@ -1,6 +1,6 @@
 import { css } from '@emotion/css';
 import type * as monacoType from 'monaco-editor/esm/vs/editor/editor.api';
-import React, { PureComponent } from 'react';
+import { PureComponent } from 'react';
 
 import { GrafanaTheme2, monacoLanguageRegistry } from '@grafana/data';
 import { selectors } from '@grafana/e2e-selectors';
@@ -27,6 +27,8 @@ class UnthemedCodeEditor extends PureComponent<Props> {
     if (this.completionCancel) {
       this.completionCancel.dispose();
     }
+
+    this.props.onEditorWillUnmount?.();
   }
 
   componentDidUpdate(oldProps: Props) {
@@ -77,6 +79,13 @@ class UnthemedCodeEditor extends PureComponent<Props> {
     }
   };
 
+  onFocus = () => {
+    const { onFocus } = this.props;
+    if (onFocus) {
+      onFocus(this.getEditorValue());
+    }
+  };
+
   onSave = () => {
     const { onSave } = this.props;
     if (onSave) {
@@ -110,19 +119,18 @@ class UnthemedCodeEditor extends PureComponent<Props> {
       }
     });
 
-    const languagePromise = this.loadCustomLanguage();
-
     if (onChange) {
       editor.getModel()?.onDidChangeContent(() => onChange(editor.getValue()));
     }
 
     if (onEditorDidMount) {
-      languagePromise.then(() => onEditorDidMount(editor, monaco));
+      onEditorDidMount(editor, monaco);
     }
   };
 
   render() {
-    const { theme, language, width, height, showMiniMap, showLineNumbers, readOnly, monacoOptions } = this.props;
+    const { theme, language, width, height, showMiniMap, showLineNumbers, readOnly, wordWrap, monacoOptions } =
+      this.props;
     const { alwaysConsumeMouseWheel, ...restMonacoOptions } = monacoOptions ?? {};
 
     const value = this.props.value ?? '';
@@ -131,7 +139,7 @@ class UnthemedCodeEditor extends PureComponent<Props> {
     const containerStyles = this.props.containerStyles ?? getStyles(theme).container;
 
     const options: MonacoOptions = {
-      wordWrap: 'off',
+      wordWrap: wordWrap ? 'on' : 'off',
       tabSize: 2,
       codeLens: false,
       contextmenu: false,
@@ -164,7 +172,12 @@ class UnthemedCodeEditor extends PureComponent<Props> {
     }
 
     return (
-      <div className={containerStyles} onBlur={this.onBlur} data-testid={selectors.components.CodeEditor.container}>
+      <div
+        className={containerStyles}
+        onFocus={this.onFocus}
+        onBlur={this.onBlur}
+        data-testid={selectors.components.CodeEditor.container}
+      >
         <ReactMonacoEditorLazy
           width={width}
           height={height}

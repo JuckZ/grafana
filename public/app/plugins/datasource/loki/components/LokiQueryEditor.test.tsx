@@ -1,12 +1,11 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { cloneDeep, defaultsDeep } from 'lodash';
-import React from 'react';
 
 import { CoreApp } from '@grafana/data';
-import { QueryEditorMode } from 'app/plugins/datasource/prometheus/querybuilder/shared/types';
+import { QueryEditorMode } from '@grafana/experimental';
 
-import { createLokiDatasource } from '../mocks';
+import { createLokiDatasource } from '../__mocks__/datasource';
 import { EXPLAIN_LABEL_FILTER_CONTENT } from '../querybuilder/components/LokiQueryBuilderExplained';
 import { LokiQuery, LokiQueryType } from '../types';
 
@@ -16,6 +15,9 @@ import { LokiQueryEditorProps } from './types';
 jest.mock('@grafana/runtime', () => {
   return {
     ...jest.requireActual('@grafana/runtime'),
+    getAppEvents: jest.fn().mockReturnValue({
+      subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
+    }),
     reportInteraction: jest.fn(),
   };
 });
@@ -25,18 +27,6 @@ jest.mock('./monaco-query-field/MonacoQueryFieldWrapper', () => {
   return {
     MonacoQueryFieldWrapper: () => {
       return 'MonacoQueryFieldWrapper';
-    },
-  };
-});
-
-jest.mock('app/core/store', () => {
-  return {
-    get() {
-      return undefined;
-    },
-    set() {},
-    getObject(key: string, defaultValue: unknown) {
-      return defaultValue;
     },
   };
 });
@@ -59,6 +49,10 @@ const defaultProps = {
 };
 
 describe('LokiQueryEditorSelector', () => {
+  // We need to clear local storage after each test because we are using it to store the editor mode and enabled explain
+  afterEach(() => {
+    window.localStorage.clear();
+  });
   it('shows code editor if expr and nothing else', async () => {
     // We opt for showing code editor for queries created before this feature was added
     render(<LokiQueryEditor {...defaultProps} />);

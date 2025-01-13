@@ -6,19 +6,27 @@ import { createFetchResponse } from 'test/helpers/createFetchResponse';
 import {
   DataFrame,
   DataFrameJSON,
+  DataSourceInstanceSettings,
   Field,
   FieldType,
-  getDefaultRelativeTimeRange,
   LoadingState,
+  getDefaultRelativeTimeRange,
   rangeUtil,
-  DataSourceInstanceSettings,
 } from '@grafana/data';
-import { DataSourceSrv, FetchResponse, DataSourceWithBackend } from '@grafana/runtime';
+import { DataSourceSrv, DataSourceWithBackend, FetchResponse } from '@grafana/runtime';
 import { DataQuery } from '@grafana/schema';
 import { BackendSrv } from 'app/core/services/backend_srv';
+import {
+  EXTERNAL_VANILLA_ALERTMANAGER_UID,
+  mockDataSources,
+} from 'app/features/alerting/unified/components/settings/__mocks__/server';
+import { setupMswServer } from 'app/features/alerting/unified/mockApi';
+import { setupDataSources } from 'app/features/alerting/unified/testSetup/datasources';
 import { AlertDataQuery, AlertQuery } from 'app/types/unified-alerting-dto';
 
 import { AlertingQueryResponse, AlertingQueryRunner } from './AlertingQueryRunner';
+
+setupMswServer();
 
 describe('AlertingQueryRunner', () => {
   it('should successfully map response and return panel data by refId', async () => {
@@ -28,16 +36,16 @@ describe('AlertingQueryRunner', () => {
         B: { frames: [createDataFrameJSON([5, 6])] },
       },
     });
+    setupDataSources(...Object.values(mockDataSources));
 
     const runner = new AlertingQueryRunner(
       mockBackendSrv({
         fetch: () => of(response),
-      }),
-      mockDataSourceSrv()
+      })
     );
 
     const data = runner.get();
-    runner.run([createQuery('A'), createQuery('B')]);
+    runner.run([createQuery('A'), createQuery('B')], 'B');
 
     await expect(data.pipe(take(1))).toEmitValuesWith((values) => {
       const [data] = values;
@@ -94,7 +102,7 @@ describe('AlertingQueryRunner', () => {
     );
 
     const data = runner.get();
-    runner.run([createQuery('A'), createQuery('B')]);
+    runner.run([createQuery('A'), createQuery('B')], 'B');
 
     await expect(data.pipe(take(1))).toEmitValuesWith((values) => {
       const [data] = values;
@@ -121,12 +129,11 @@ describe('AlertingQueryRunner', () => {
     const runner = new AlertingQueryRunner(
       mockBackendSrv({
         fetch: () => of(response).pipe(delay(210)),
-      }),
-      mockDataSourceSrv()
+      })
     );
 
     const data = runner.get();
-    runner.run([createQuery('A'), createQuery('B')]);
+    runner.run([createQuery('A'), createQuery('B')], 'B');
 
     await expect(data.pipe(take(2))).toEmitValuesWith((values) => {
       const [loading, data] = values;
@@ -176,12 +183,11 @@ describe('AlertingQueryRunner', () => {
     const runner = new AlertingQueryRunner(
       mockBackendSrv({
         fetch: () => throwError(error),
-      }),
-      mockDataSourceSrv()
+      })
     );
 
     const data = runner.get();
-    runner.run([createQuery('A'), createQuery('B')]);
+    runner.run([createQuery('A'), createQuery('B')], 'B');
 
     await expect(data.pipe(take(1))).toEmitValuesWith((values) => {
       const [data] = values;
@@ -203,7 +209,7 @@ describe('AlertingQueryRunner', () => {
     );
 
     const data = runner.get();
-    runner.run([createQuery('A'), createQuery('B')]);
+    runner.run([createQuery('A'), createQuery('B')], 'B');
 
     await expect(data.pipe(take(1))).toEmitValuesWith((values) => {
       const [data] = values;
@@ -216,10 +222,10 @@ describe('AlertingQueryRunner', () => {
     });
   });
 
-  it('should skip hidden queries', async () => {
+  it('should skip hidden queries and descendant nodes', async () => {
     const results = createFetchResponse<AlertingQueryResponse>({
       results: {
-        B: { frames: [createDataFrameJSON([1, 2, 3])] },
+        C: { frames: [createDataFrameJSON([1, 2, 3])] },
       },
     });
 
@@ -231,21 +237,35 @@ describe('AlertingQueryRunner', () => {
     );
 
     const data = runner.get();
-    runner.run([
-      createQuery('A', {
-        model: {
-          refId: 'A',
-          hide: true,
-        },
-      }),
-      createQuery('B'),
-    ]);
+    runner.run(
+      [
+        createQuery('A', {
+          model: {
+            refId: 'A',
+            hide: true,
+          },
+        }),
+        createQuery('B', {
+          model: {
+            expression: 'A', // depends on A
+            refId: 'B',
+          },
+        }),
+        createQuery('C', {
+          model: {
+            refId: 'C',
+          },
+        }),
+      ],
+      'B'
+    );
 
     await expect(data.pipe(take(1))).toEmitValuesWith((values) => {
       const [loading, _data] = values;
 
       expect(loading.A).toBeUndefined();
-      expect(loading.B.state).toEqual(LoadingState.Done);
+      expect(loading.B).toBeUndefined();
+      expect(loading.C.state).toEqual(LoadingState.Done);
     });
   });
 });
@@ -318,7 +338,7 @@ const createQuery = (refId: string, options?: Partial<AlertQuery>): AlertQuery =
   return defaultsDeep(options, {
     refId,
     queryType: '',
-    datasourceUid: '',
+    datasourceUid: EXTERNAL_VANILLA_ALERTMANAGER_UID,
     model: { refId },
     relativeTimeRange: getDefaultRelativeTimeRange(),
   });

@@ -1,24 +1,36 @@
-import React, { ComponentProps } from 'react';
+import { ComponentProps } from 'react';
 
-import { config } from '@grafana/runtime';
-import { SceneComponentProps, SceneObjectBase, SceneObjectState, VizPanel, SceneObjectRef } from '@grafana/scenes';
+import { config, locationService } from '@grafana/runtime';
+import { SceneComponentProps, SceneObjectBase, SceneObjectRef, SceneObjectState, VizPanel } from '@grafana/scenes';
 import { Modal, ModalTabsHeader, TabContent } from '@grafana/ui';
 import { contextSrv } from 'app/core/core';
 import { t } from 'app/core/internationalization';
+import { isPublicDashboardsEnabled } from 'app/features/dashboard/components/ShareModal/SharePublicDashboard/SharePublicDashboardUtils';
+import { AccessControlAction } from 'app/types';
 
-import { DashboardScene } from '../scene/DashboardScene';
-import { getDashboardSceneFor } from '../utils/utils';
+import { getTrackingSource } from '../../dashboard/components/ShareModal/utils';
+import { DashboardInteractions } from '../utils/interactions';
+import { getDashboardSceneFor, isLibraryPanel } from '../utils/utils';
 
 import { ShareExportTab } from './ShareExportTab';
+import { ShareLibraryPanelTab } from './ShareLibraryPanelTab';
 import { ShareLinkTab } from './ShareLinkTab';
+import { SharePanelEmbedTab } from './SharePanelEmbedTab';
 import { ShareSnapshotTab } from './ShareSnapshotTab';
-import { ModalSceneObjectLike, SceneShareTab } from './types';
+import { SharePublicDashboardTab } from './public-dashboards/SharePublicDashboardTab';
+import { ModalSceneObjectLike, SceneShareTab, SceneShareTabState } from './types';
 
 interface ShareModalState extends SceneObjectState {
-  dashboardRef: SceneObjectRef<DashboardScene>;
   panelRef?: SceneObjectRef<VizPanel>;
   tabs?: SceneShareTab[];
   activeTab: string;
+}
+
+type customDashboardTabType = new (...args: SceneShareTabState[]) => SceneShareTab;
+const customDashboardTabs: customDashboardTabType[] = [];
+
+export function addDashboardShareTab(tab: customDashboardTabType) {
+  customDashboardTabs.push(tab);
 }
 
 /**
@@ -27,64 +39,71 @@ interface ShareModalState extends SceneObjectState {
 export class ShareModal extends SceneObjectBase<ShareModalState> implements ModalSceneObjectLike {
   static Component = SharePanelModalRenderer;
 
-  constructor(state: Omit<ShareModalState, 'activeTab'>) {
+  constructor(state: Omit<ShareModalState, 'activeTab'> & { activeTab?: string }) {
     super({
+      activeTab: 'link',
       ...state,
-      activeTab: 'Link',
     });
 
-    this.addActivationHandler(() => this.buildTabs());
+    this.addActivationHandler(() => this.buildTabs(state.activeTab));
   }
 
-  private buildTabs() {
-    const { dashboardRef, panelRef } = this.state;
+  private buildTabs(activeTab?: string) {
+    const { panelRef } = this.state;
+    const modalRef = this.getRef();
 
-    const tabs: SceneShareTab[] = [new ShareLinkTab({ dashboardRef, panelRef, modalRef: this.getRef() })];
+    const tabs: SceneShareTab[] = [new ShareLinkTab({ panelRef, modalRef })];
+    const dashboard = getDashboardSceneFor(this);
 
     if (!panelRef) {
-      tabs.push(new ShareExportTab({ dashboardRef, modalRef: this.getRef() }));
+      tabs.push(new ShareExportTab({ modalRef }));
     }
 
-    if (contextSrv.isSignedIn && config.snapshotEnabled) {
-      tabs.push(new ShareSnapshotTab({ panelRef, dashboardRef, modalRef: this.getRef() }));
+    if (
+      contextSrv.isSignedIn &&
+      config.snapshotEnabled &&
+      contextSrv.hasPermission(AccessControlAction.SnapshotsCreate)
+    ) {
+      tabs.push(new ShareSnapshotTab({ panelRef, dashboardRef: dashboard.getRef(), modalRef }));
     }
 
-    this.setState({ tabs });
+    if (panelRef) {
+      tabs.push(new SharePanelEmbedTab({ panelRef }));
+      const panel = panelRef.resolve();
+      if (panel instanceof VizPanel) {
+        if (!isLibraryPanel(panel)) {
+          tabs.push(new ShareLibraryPanelTab({ panelRef, modalRef }));
+        }
+      }
+    }
 
-    // if (panel) {
-    //   const embedLabel = t('share-modal.tab-title.embed', 'Embed');
-    //   tabs.push({ label: embedLabel, value: shareDashboardType.embed, component: ShareEmbed });
+    if (!panelRef) {
+      tabs.push(...customDashboardTabs.map((Tab) => new Tab({ modalRef })));
 
-    //   if (!isPanelModelLibraryPanel(panel)) {
-    //     const libraryPanelLabel = t('share-modal.tab-title.library-panel', 'Library panel');
-    //     tabs.push({ label: libraryPanelLabel, value: shareDashboardType.libraryPanel, component: ShareLibraryPanel });
-    //   }
-    //   tabs.push(...customPanelTabs);
-    // } else {
-    //   const exportLabel = t('share-modal.tab-title.export', 'Export');
-    //   tabs.push({
-    //     label: exportLabel,
-    //     value: shareDashboardType.export,
-    //     component: ShareExport,
-    //   });
-    //   tabs.push(...customDashboardTabs);
-    // }
+      if (isPublicDashboardsEnabled()) {
+        tabs.push(new SharePublicDashboardTab({ modalRef }));
+      }
+    }
 
-    // if (Boolean(config.featureToggles['publicDashboards'])) {
-    //   tabs.push({
-    //     label: 'Public dashboard',
-    //     value: shareDashboardType.publicDashboard,
-    //     component: SharePublicDashboard,
-    //   });
-    // }
+    const at = tabs.find((t) => t.tabId === activeTab);
+
+    this.setState({ activeTab: at?.tabId ?? tabs[0].tabId, tabs });
   }
 
   onDismiss = () => {
-    const dashboard = getDashboardSceneFor(this);
-    dashboard.closeModal();
+    if (this.state.panelRef) {
+      const dashboard = getDashboardSceneFor(this);
+      dashboard.closeModal();
+    } else {
+      locationService.partial({ shareView: null });
+    }
   };
 
   onChangeTab: ComponentProps<typeof ModalTabsHeader>['onChangeTab'] = (tab) => {
+    DashboardInteractions.sharingCategoryClicked({
+      item: tab.value,
+      shareResource: getTrackingSource(this.state.panelRef),
+    });
     this.setState({ activeTab: tab.value });
   };
 }
@@ -99,7 +118,7 @@ function SharePanelModalRenderer({ model }: SceneComponentProps<ShareModal>) {
 
   const modalTabs = tabs?.map((tab) => ({
     label: tab.getTabLabel(),
-    value: tab.getTabLabel(),
+    value: tab.tabId,
   }));
 
   const header = (
@@ -112,7 +131,7 @@ function SharePanelModalRenderer({ model }: SceneComponentProps<ShareModal>) {
     />
   );
 
-  const currentTab = tabs.find((t) => t.getTabLabel() === activeTab);
+  const currentTab = tabs.find((t) => t.tabId === activeTab);
 
   return (
     <Modal isOpen={true} title={header} onDismiss={model.onDismiss}>

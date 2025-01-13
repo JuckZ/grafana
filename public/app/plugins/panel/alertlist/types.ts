@@ -1,5 +1,3 @@
-import { Alert } from 'app/types/unified-alerting';
-
 export enum SortOrder {
   AlphaAsc = 1,
   AlphaDesc,
@@ -40,6 +38,7 @@ export interface AlertListOptions {
     pending: boolean;
   };
   folderId: number;
+  showInactiveAlerts: boolean;
 }
 
 export interface StateFilter {
@@ -64,6 +63,5 @@ export interface UnifiedAlertListOptions {
   alertInstanceLabelFilter: string;
   datasource: string;
   viewMode: ViewMode;
+  showInactiveAlerts: boolean;
 }
-
-export type GroupedRules = Map<string, Alert[]>;

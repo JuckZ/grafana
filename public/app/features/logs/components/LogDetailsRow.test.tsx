@@ -1,5 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import React, { ComponentProps } from 'react';
+import { ComponentProps } from 'react';
+
+import { CoreApp, FieldType, LinkModel } from '@grafana/data';
+import { Field } from '@grafana/data/';
 
 import { LogDetailsRow } from './LogDetailsRow';
 import { createLogRow } from './__mocks__/logRow';
@@ -8,8 +11,8 @@ type Props = ComponentProps<typeof LogDetailsRow>;
 
 const setup = (propOverrides?: Partial<Props>) => {
   const props: Props = {
-    parsedValues: [''],
-    parsedKeys: [''],
+    parsedValues: ['value'],
+    parsedKeys: ['key'],
     isLabel: true,
     wrapLogMessage: false,
     getStats: () => null,
@@ -20,6 +23,7 @@ const setup = (propOverrides?: Partial<Props>) => {
     displayedFields: [],
     row: createLogRow(),
     disableActions: false,
+    app: CoreApp.Explore,
   };
 
   Object.assign(props, propOverrides);
@@ -66,6 +70,40 @@ describe('LogDetailsRow', () => {
       });
       expect(await screen.findByRole('button', { name: 'Remove filter in query A' })).toBeInTheDocument();
     });
+    it('should trigger a call to `onClickFilterOutLabel` when the filter out button is clicked', () => {
+      const onClickFilterOutLabel = jest.fn();
+      setup({ onClickFilterOutLabel });
+      fireEvent.click(screen.getByRole('button', { name: 'Filter out value in query A' }));
+      expect(onClickFilterOutLabel).toHaveBeenCalledWith(
+        'key',
+        'value',
+        expect.objectContaining({
+          fields: [
+            expect.objectContaining({ values: [0] }),
+            expect.objectContaining({ values: ['line1'] }),
+            expect.objectContaining({ values: [{ app: 'app01' }] }),
+          ],
+          length: 1,
+        })
+      );
+    });
+    it('should trigger a call to `onClickFilterLabel` when the filter  button is clicked', () => {
+      const onClickFilterLabel = jest.fn();
+      setup({ onClickFilterLabel });
+      fireEvent.click(screen.getByRole('button', { name: 'Filter for value in query A' }));
+      expect(onClickFilterLabel).toHaveBeenCalledWith(
+        'key',
+        'value',
+        expect.objectContaining({
+          fields: [
+            expect.objectContaining({ values: [0] }),
+            expect.objectContaining({ values: ['line1'] }),
+            expect.objectContaining({ values: [{ app: 'app01' }] }),
+          ],
+          length: 1,
+        })
+      );
+    });
   });
 
   describe('if props is not a label', () => {
@@ -108,6 +146,36 @@ describe('LogDetailsRow', () => {
       // This tests a regression where the button was always visible.
       expect(screen.getByTitle('Copy value to clipboard')).not.toBeVisible();
       // Asserting visibility on mouse-over is currently not possible.
+    });
+  });
+
+  describe('datalinks', () => {
+    it('datalinks should pin and call the original link click', () => {
+      const onLinkClick = jest.fn();
+      const onPinLine = jest.fn();
+      const links: Array<LinkModel<Field>> = [
+        {
+          onClick: onLinkClick,
+          href: '#',
+          title: 'Hello link',
+          target: '_self',
+          origin: {
+            name: 'name',
+            type: FieldType.string,
+            config: {},
+            values: ['string'],
+          },
+        },
+      ];
+      setup({ links, onPinLine });
+
+      expect(onLinkClick).not.toHaveBeenCalled();
+      expect(onPinLine).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Hello link' }));
+
+      expect(onLinkClick).toHaveBeenCalled();
+      expect(onPinLine).toHaveBeenCalled();
     });
   });
 });

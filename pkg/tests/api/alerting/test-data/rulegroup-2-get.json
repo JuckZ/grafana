@@ -38,11 +38,16 @@
         "version": 1,
         "uid": "<dynamic>",
         "namespace_uid": "<dynamic>",
-        "namespace_id": 0,
         "rule_group": "Group2",
         "no_data_state": "NoData",
         "exec_err_state": "Error",
-        "is_paused": false
+        "is_paused": false,
+        "metadata": {
+          "editor_settings": {
+            "simplified_query_and_expressions_section": false,
+            "simplified_notifications_section": false
+          }
+        }
       }
     }
   ]

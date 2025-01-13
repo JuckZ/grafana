@@ -1,4 +1,5 @@
 import { GrafanaPlugin, NavModel, NavModelItem, PanelPluginMeta, PluginType } from '@grafana/data';
+import { createMonitoringLogger } from '@grafana/runtime';
 
 import { importPanelPluginFromMeta } from './importPanelPlugin';
 import { getPluginSettings } from './pluginSettings';
@@ -29,11 +30,10 @@ export async function loadPlugin(pluginId: string): Promise<GrafanaPlugin> {
   return result;
 }
 
-export function buildPluginSectionNav(
-  pluginNavSection: NavModelItem,
-  pluginNav: NavModel | null,
-  currentUrl: string
-): NavModel | undefined {
+export function buildPluginSectionNav(currentUrl: string, pluginNavSection?: NavModelItem): NavModel | undefined {
+  if (!pluginNavSection) {
+    return undefined;
+  }
   // shallow clone as we set active flag
   const MAX_RECURSION_DEPTH = 10;
   let copiedPluginNavSection = { ...pluginNavSection };
@@ -83,3 +83,5 @@ export function buildPluginSectionNav(
 
   return { main: copiedPluginNavSection, node: activePage ?? copiedPluginNavSection };
 }
+
+export const pluginsLogger = createMonitoringLogger('features.plugins');

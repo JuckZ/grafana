@@ -1,9 +1,11 @@
-import { DataSourceApi, dateTime, ExploreUrlState, LogsSortOrder } from '@grafana/data';
+import { DataSourceApi, dateTime, ExploreUrlState, GrafanaConfig, locationUtil, LogsSortOrder } from '@grafana/data';
 import { serializeStateToUrlParam } from '@grafana/data/src/utils/url';
+import { config } from '@grafana/runtime';
 import { DataQuery } from '@grafana/schema';
 import { RefreshPicker } from '@grafana/ui';
-import store from 'app/core/store';
-import { DEFAULT_RANGE } from 'app/features/explore/state/utils';
+import { getTimeSrv } from 'app/features/dashboard/services/TimeSrv';
+import { DEFAULT_RANGE } from 'app/features/explore/state/constants';
+import { getVariablesUrlParams } from 'app/features/variables/getAllVariableValuesForUrl';
 
 import { DatasourceSrvMock, MockDataSourceApi } from '../../../test/mocks/datasource_srv';
 
@@ -11,7 +13,6 @@ import {
   buildQueryTransaction,
   hasNonEmptyQuery,
   refreshIntervalToSortOrder,
-  updateHistory,
   getExploreUrl,
   GetExploreUrlArguments,
   getTimeRange,
@@ -62,6 +63,11 @@ const getDataSourceSrvMock = jest.fn().mockReturnValue(datasourceSrv);
 jest.mock('@grafana/runtime', () => ({
   ...jest.requireActual('@grafana/runtime'),
   getDataSourceSrv: () => getDataSourceSrvMock(),
+}));
+
+// Avoids errors caused by circular dependencies
+jest.mock('app/features/live/dashboard/dashboardWatcher', () => ({
+  ignoreNextSave: jest.fn(),
 }));
 
 describe('state functions', () => {
@@ -149,26 +155,26 @@ describe('getExploreUrl', () => {
     expect(interpolateMockLoki).toBeCalled();
     expect(interpolateMockProm).toBeCalled();
   });
-});
 
-describe('updateHistory()', () => {
-  const datasourceId = 'myDatasource';
-  const key = `grafana.explore.history.${datasourceId}`;
-
-  beforeEach(() => {
-    store.delete(key);
-    expect(store.exists(key)).toBeFalsy();
-  });
-
-  test('should save history item to localStorage', () => {
-    const expected = [
-      {
-        query: { refId: '1', expr: 'metric' },
-      },
-    ];
-    expect(updateHistory([], datasourceId, [{ refId: '1', expr: 'metric' }])).toMatchObject(expected);
-    expect(store.exists(key)).toBeTruthy();
-    expect(store.getObject(key)).toMatchObject(expected);
+  describe('subpath', () => {
+    beforeAll(() => {
+      locationUtil.initialize({
+        config: { appSubUrl: '/subpath' } as GrafanaConfig,
+        getVariablesUrlParams: jest.fn(),
+        getTimeRangeForUrl: jest.fn(),
+      });
+    });
+    afterAll(() => {
+      // Reset locationUtil
+      locationUtil.initialize({
+        config,
+        getTimeRangeForUrl: getTimeSrv().timeRangeForUrl,
+        getVariablesUrlParams: getVariablesUrlParams,
+      });
+    });
+    it('should work with sub path', async () => {
+      expect(await getExploreUrl(args)).toMatch(/subpath\/explore/g);
+    });
   });
 });
 
@@ -187,7 +193,7 @@ describe('hasNonEmptyQuery', () => {
 });
 
 describe('getTimeRange', () => {
-  describe('should flip from and to when from is after to', () => {
+  describe('should not flip from and to when from is after to', () => {
     const rawRange = {
       from: 'now',
       to: 'now-6h',
@@ -195,7 +201,7 @@ describe('getTimeRange', () => {
 
     const range = getTimeRange('utc', rawRange, 0);
 
-    expect(range.from.isBefore(range.to)).toBe(true);
+    expect(range.from.isBefore(range.to)).toBe(false);
   });
 });
 
@@ -254,6 +260,12 @@ describe('when buildQueryTransaction', () => {
     const range = { from: dateTime().subtract(1, 'd'), to: dateTime(), raw: { from: '1h', to: '1h' } };
     const transaction = buildQueryTransaction('left', queries, queryOptions, range, false);
     expect(transaction.request.interval).toEqual('2h');
+  });
+  it('it should create a request with X-Cache-Skip set to true', () => {
+    const queries = [{ refId: 'A' }];
+    const range = { from: dateTime().subtract(1, 'd'), to: dateTime(), raw: { from: '1h', to: '1h' } };
+    const transaction = buildQueryTransaction('left', queries, {}, range, false);
+    expect(transaction.request.skipQueryCache).toBe(true);
   });
 });
 

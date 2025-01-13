@@ -27,6 +27,7 @@ export interface CodeEditorProps {
   readOnly?: boolean;
   showMiniMap?: boolean;
   showLineNumbers?: boolean;
+  wordWrap?: boolean;
   monacoOptions?: MonacoOptions;
 
   /**
@@ -39,8 +40,14 @@ export interface CodeEditorProps {
    */
   onEditorDidMount?: (editor: MonacoEditor, monaco: Monaco) => void;
 
+  /** Callback before the edior has unmounted */
+  onEditorWillUnmount?: () => void;
+
   /** Handler to be performed when editor is blurred */
   onBlur?: CodeEditorChangeHandler;
+
+  /** Handler to be performed when editor is focused */
+  onFocus?: CodeEditorChangeHandler;
 
   /** Handler to be performed whenever the text inside the editor changes */
   onChange?: CodeEditorChangeHandler;

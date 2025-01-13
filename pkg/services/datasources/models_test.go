@@ -63,14 +63,16 @@ func TestTeamHTTPHeaders(t *testing.T) {
 	testCases := []struct {
 		desc  string
 		given string
-		want  TeamHTTPHeaders
+		want  *TeamHTTPHeaders
 	}{
 		{
 			desc:  "Usual json data with teamHttpHeaders",
-			given: `{"teamHttpHeaders": {"101": [{"header": "X-CUSTOM-HEADER", "value": "foo"}]}}`,
-			want: TeamHTTPHeaders{
-				"101": {
-					{Header: "X-CUSTOM-HEADER", Value: "foo"},
+			given: `{"teamHttpHeaders": {"headers": {"101": [{"header": "X-CUSTOM-HEADER", "value": "foo"}]}}}`,
+			want: &TeamHTTPHeaders{
+				Headers: TeamHeaders{
+					"101": {
+						{Header: "X-CUSTOM-HEADER", Value: "foo"},
+					},
 				},
 			},
 		},
@@ -93,7 +95,7 @@ func TestTeamHTTPHeaders(t *testing.T) {
 				UID:      "test",
 			}
 
-			actual, err := ds.TeamHTTPHeaders()
+			actual, err := GetTeamHTTPHeaders(ds.JsonData)
 			assert.NoError(t, err)
 			assert.Equal(t, test.want, actual)
 			assert.EqualValues(t, test.want, actual)

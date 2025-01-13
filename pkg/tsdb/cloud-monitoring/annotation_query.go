@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 	"github.com/grafana/grafana-plugin-sdk-go/data"
 )
 
@@ -18,11 +19,15 @@ type annotationEvent struct {
 	Text  string
 }
 
-func (s *Service) executeAnnotationQuery(ctx context.Context, req *backend.QueryDataRequest, dsInfo datasourceInfo, queries []cloudMonitoringQueryExecutor) (
+func (s *Service) executeAnnotationQuery(ctx context.Context, req *backend.QueryDataRequest, dsInfo datasourceInfo, queries []cloudMonitoringQueryExecutor, logger log.Logger) (
 	*backend.QueryDataResponse, error) {
 	resp := backend.NewQueryDataResponse()
-	queryRes, dr, _, err := queries[0].run(ctx, req, s, dsInfo, s.tracer)
+	dr, queryRes, _, err := queries[0].run(ctx, req, s, dsInfo, logger)
+	if dr.Error != nil {
+		resp.Responses[queries[0].getRefID()] = backend.ErrorResponseWithErrorSource(dr.Error)
+	}
 	if err != nil {
+		resp.Responses[queries[0].getRefID()] = backend.ErrorResponseWithErrorSource(err)
 		return resp, err
 	}
 
@@ -36,10 +41,19 @@ func (s *Service) executeAnnotationQuery(ctx context.Context, req *backend.Query
 	firstQuery := req.Queries[0]
 	err = json.Unmarshal(firstQuery.JSON, &tslq)
 	if err != nil {
+		logger.Error("error unmarshaling query", "error", err, "statusSource", backend.ErrorSourceDownstream)
+		resp.Responses[firstQuery.RefID] = backend.ErrorResponseWithErrorSource(err)
 		return resp, nil
 	}
-	err = parseToAnnotations(req.Queries[0].RefID, queryRes, dr.(cloudMonitoringResponse), tslq.TimeSeriesList.Title, tslq.TimeSeriesList.Text)
-	resp.Responses[firstQuery.RefID] = *queryRes
+
+	// parseToAnnotations never actually returns an error
+	err = parseToAnnotations(req.Queries[0].RefID, dr, queryRes.(cloudMonitoringResponse), tslq.TimeSeriesList.Title, tslq.TimeSeriesList.Text)
+	resp.Responses[firstQuery.RefID] = *dr
+
+	if err != nil {
+		resp.Responses[firstQuery.RefID] = backend.ErrorResponseWithErrorSource(err)
+		return resp, err
+	}
 
 	return resp, err
 }

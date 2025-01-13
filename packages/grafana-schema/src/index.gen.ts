@@ -37,9 +37,7 @@ export type {
   RegexMap,
   SpecialValueMap,
   ValueMappingResult,
-  LibraryPanelRef,
-  GraphPanel,
-  HeatmapPanel
+  LibraryPanelRef
 } from './raw/dashboard/x/dashboard_types.gen';
 
 // Raw generated enums and default consts from dashboard kind.
@@ -75,6 +73,7 @@ export type {
   VariableModel,
   DataSourceRef,
   DataTransformerConfig,
+  TimePickerConfig,
   Panel,
   FieldConfigSource,
   MatcherConfig,
@@ -97,15 +96,13 @@ export {
   defaultAnnotationQuery,
   defaultVariableModel,
   VariableHide,
+  defaultTimePickerConfig,
   defaultPanel,
   defaultFieldConfigSource,
   defaultMatcherConfig,
   defaultFieldConfig,
   defaultRowPanel
 } from './veneer/dashboard.types';
-
-// Raw generated types from Folder kind.
-export type { Folder } from './raw/folder/x/folder_types.gen';
 
 // Raw generated types from LibraryPanel kind.
 export type {
@@ -128,8 +125,12 @@ export type { LibraryPanel } from './veneer/librarypanel.types';
 export type {
   Preferences,
   QueryHistoryPreference,
-  CookiePreferences
+  CookiePreferences,
+  NavbarPreference
 } from './raw/preferences/x/preferences_types.gen';
+
+// Raw generated enums and default consts from preferences kind.
+export { defaultNavbarPreference } from './raw/preferences/x/preferences_types.gen';
 
 // Raw generated types from PublicDashboard kind.
 export type { PublicDashboard } from './raw/publicdashboard/x/publicdashboard_types.gen';
@@ -144,6 +145,3 @@ export type {
   BuiltinRoleRef,
   RoleBindingSubject
 } from './raw/rolebinding/x/rolebinding_types.gen';
-
-// Raw generated types from Team kind.
-export type { Team } from './raw/team/x/team_types.gen';

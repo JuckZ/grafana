@@ -2,9 +2,9 @@ import { map } from 'rxjs/operators';
 
 import { TimeZone } from '@grafana/schema';
 
-import { DateTimeOptionsWhenParsing, dateTimeParse } from '../../datetime';
-import { SynchronousDataTransformerInfo } from '../../types';
+import { dateTimeParse, DateTimeOptionsWhenParsing } from '../../datetime/parser';
 import { DataFrame, EnumFieldConfig, Field, FieldType } from '../../types/dataFrame';
+import { SynchronousDataTransformerInfo } from '../../types/transformations';
 import { fieldMatchers } from '../matchers';
 import { FieldMatcherID } from '../matchers/ids';
 
@@ -27,6 +27,10 @@ export interface ConvertFieldTypeOptions {
    * Date format to parse a string datetime
    */
   dateFormat?: string;
+  /**
+   * When converting an array to a string, the values can be joined with a custom separator
+   */
+  joinWith?: string;
   /**
    * When converting a date to a string an option timezone.
    */
@@ -103,7 +107,7 @@ export function convertFieldType(field: Field, opts: ConvertFieldTypeOptions): F
     case FieldType.number:
       return fieldToNumberField(field);
     case FieldType.string:
-      return fieldToStringField(field, opts.dateFormat, { timeZone: opts.timezone });
+      return fieldToStringField(field, opts.dateFormat, { timeZone: opts.timezone }, opts.joinWith);
     case FieldType.boolean:
       return fieldToBooleanField(field);
     case FieldType.enum:
@@ -127,13 +131,17 @@ export function fieldToTimeField(field: Field, dateFormat?: string): Field {
   const timeValues = field.values.slice();
 
   let firstDefined = timeValues.find((v) => v != null);
-
-  let isISO8601 = typeof firstDefined === 'string' && iso8601Regex.test(firstDefined);
+  const convertToMS = typeof firstDefined === 'number' && dateFormat === 'X';
+  const isISO8601 = typeof firstDefined === 'string' && iso8601Regex.test(firstDefined);
 
   for (let t = 0; t < timeValues.length; t++) {
     if (timeValues[t]) {
       let parsed = isISO8601 ? Date.parse(timeValues[t]) : dateTimeParse(timeValues[t], opts).valueOf();
-      timeValues[t] = Number.isFinite(parsed) ? parsed : null;
+      if (Number.isFinite(parsed)) {
+        timeValues[t] = convertToMS ? parsed * 1000 : parsed;
+      } else {
+        timeValues[t] = null;
+      }
     } else {
       timeValues[t] = null;
     }
@@ -192,7 +200,8 @@ function fieldToBooleanField(field: Field): Field {
 export function fieldToStringField(
   field: Field,
   dateFormat?: string,
-  parseOptions?: DateTimeOptionsWhenParsing
+  parseOptions?: DateTimeOptionsWhenParsing,
+  joinWith?: string
 ): Field {
   let values = field.values;
 
@@ -202,7 +211,12 @@ export function fieldToStringField(
       break;
 
     case FieldType.other:
-      values = values.map((v) => JSON.stringify(v));
+      values = values.map((v) => {
+        if (joinWith?.length && Array.isArray(v)) {
+          return v.join(joinWith);
+        }
+        return JSON.stringify(v); // will quote strings and avoid "object"
+      });
       break;
 
     default:
@@ -244,10 +258,13 @@ function fieldToComplexField(field: Field): Field {
  */
 export function ensureTimeField(field: Field, dateFormat?: string): Field {
   const firstValueTypeIsNumber = typeof field.values[0] === 'number';
+  // if the format is unix seconds, we don't want to skip formatting
+  const isUnixSecondsFormat = dateFormat === 'X';
+
   if (field.type === FieldType.time && firstValueTypeIsNumber) {
     return field; //already time
   }
-  if (firstValueTypeIsNumber) {
+  if (firstValueTypeIsNumber && !isUnixSecondsFormat) {
     return {
       ...field,
       type: FieldType.time, //assumes it should be time
@@ -256,25 +273,24 @@ export function ensureTimeField(field: Field, dateFormat?: string): Field {
   return fieldToTimeField(field, dateFormat);
 }
 
-function fieldToEnumField(field: Field, cfg?: EnumFieldConfig): Field {
-  const enumConfig = { ...cfg };
+function fieldToEnumField(field: Field, config?: EnumFieldConfig): Field {
+  const enumConfig = { ...config };
   const enumValues = field.values.slice();
+
+  // Create lookup map based on existing enum config text values, if none exist return field as is
   const lookup = new Map<unknown, number>();
-  if (enumConfig.text) {
+  if (enumConfig.text && enumConfig.text.length > 0) {
     for (let i = 0; i < enumConfig.text.length; i++) {
       lookup.set(enumConfig.text[i], i);
     }
   } else {
-    enumConfig.text = [];
+    return field;
   }
 
+  // Convert field values to enum indexes
   for (let i = 0; i < enumValues.length; i++) {
-    const v = enumValues[i];
-    if (!lookup.has(v)) {
-      enumConfig.text[lookup.size] = v;
-      lookup.set(v, lookup.size);
-    }
-    enumValues[i] = lookup.get(v);
+    const value = enumValues[i];
+    enumValues[i] = lookup.get(value);
   }
 
   return {

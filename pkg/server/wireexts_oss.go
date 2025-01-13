@@ -6,7 +6,9 @@ package server
 
 import (
 	"github.com/google/wire"
+	search2 "github.com/grafana/grafana/pkg/storage/unified/search"
 
+	"github.com/grafana/grafana/pkg/infra/metrics"
 	"github.com/grafana/grafana/pkg/plugins"
 	"github.com/grafana/grafana/pkg/plugins/manager"
 	"github.com/grafana/grafana/pkg/registry"
@@ -17,6 +19,8 @@ import (
 	"github.com/grafana/grafana/pkg/services/accesscontrol/ossaccesscontrol"
 	"github.com/grafana/grafana/pkg/services/anonymous"
 	"github.com/grafana/grafana/pkg/services/anonymous/anonimpl"
+	"github.com/grafana/grafana/pkg/services/anonymous/validator"
+	"github.com/grafana/grafana/pkg/services/apiserver/standalone"
 	"github.com/grafana/grafana/pkg/services/auth"
 	"github.com/grafana/grafana/pkg/services/auth/authimpl"
 	"github.com/grafana/grafana/pkg/services/auth/idimpl"
@@ -31,10 +35,12 @@ import (
 	"github.com/grafana/grafana/pkg/services/ldap"
 	"github.com/grafana/grafana/pkg/services/licensing"
 	"github.com/grafana/grafana/pkg/services/login"
-	"github.com/grafana/grafana/pkg/services/login/authinfoservice"
+	"github.com/grafana/grafana/pkg/services/login/authinfoimpl"
 	"github.com/grafana/grafana/pkg/services/pluginsintegration"
+	"github.com/grafana/grafana/pkg/services/pluginsintegration/pluginaccesscontrol"
 	"github.com/grafana/grafana/pkg/services/provisioning"
 	"github.com/grafana/grafana/pkg/services/publicdashboards"
+	publicdashboardsApi "github.com/grafana/grafana/pkg/services/publicdashboards/api"
 	publicdashboardsService "github.com/grafana/grafana/pkg/services/publicdashboards/service"
 	"github.com/grafana/grafana/pkg/services/searchusers"
 	"github.com/grafana/grafana/pkg/services/searchusers/filters"
@@ -50,6 +56,8 @@ var wireExtsBasicSet = wire.NewSet(
 	authimpl.ProvideUserAuthTokenService,
 	wire.Bind(new(auth.UserTokenService), new(*authimpl.UserAuthTokenService)),
 	wire.Bind(new(auth.UserTokenBackgroundService), new(*authimpl.UserAuthTokenService)),
+	validator.ProvideAnonUserLimitValidator,
+	wire.Bind(new(validator.AnonUserLimitValidator), new(*validator.AnonUserLimitValidatorImpl)),
 	anonimpl.ProvideAnonymousDeviceService,
 	wire.Bind(new(anonymous.Service), new(*anonimpl.AnonDeviceService)),
 	licensing.ProvideService,
@@ -58,7 +66,7 @@ var wireExtsBasicSet = wire.NewSet(
 	wire.Bind(new(setting.Provider), new(*setting.OSSImpl)),
 	acimpl.ProvideService,
 	wire.Bind(new(accesscontrol.RoleRegistry), new(*acimpl.Service)),
-	wire.Bind(new(plugins.RoleRegistry), new(*acimpl.Service)),
+	wire.Bind(new(pluginaccesscontrol.RoleRegistry), new(*acimpl.Service)),
 	wire.Bind(new(accesscontrol.Service), new(*acimpl.Service)),
 	validations.ProvideValidator,
 	wire.Bind(new(validations.PluginRequestValidator), new(*validations.OSSPluginRequestValidator)),
@@ -68,8 +76,8 @@ var wireExtsBasicSet = wire.NewSet(
 	wire.Bind(new(registry.BackgroundServiceRegistry), new(*backgroundsvcs.BackgroundServiceRegistry)),
 	migrations.ProvideOSSMigrations,
 	wire.Bind(new(registry.DatabaseMigrator), new(*migrations.OSSMigrations)),
-	authinfoservice.ProvideOSSUserProtectionService,
-	wire.Bind(new(login.UserProtectionService), new(*authinfoservice.OSSUserProtectionImpl)),
+	authinfoimpl.ProvideOSSUserProtectionService,
+	wire.Bind(new(login.UserProtectionService), new(*authinfoimpl.OSSUserProtectionImpl)),
 	encryptionprovider.ProvideEncryptionProvider,
 	wire.Bind(new(encryption.Provider), new(encryptionprovider.Provider)),
 	filters.ProvideOSSSearchUserFilter,
@@ -87,6 +95,8 @@ var wireExtsBasicSet = wire.NewSet(
 	ossaccesscontrol.ProvideDatasourcePermissionsService,
 	wire.Bind(new(accesscontrol.DatasourcePermissionsService), new(*ossaccesscontrol.DatasourcePermissionsService)),
 	pluginsintegration.WireExtensionSet,
+	publicdashboardsApi.ProvideMiddleware,
+	wire.Bind(new(publicdashboards.Middleware), new(*publicdashboardsApi.Middleware)),
 	publicdashboardsService.ProvideServiceWrapper,
 	wire.Bind(new(publicdashboards.ServiceWrapper), new(*publicdashboardsService.PublicDashboardServiceWrapperImpl)),
 	caching.ProvideCachingService,
@@ -97,6 +107,9 @@ var wireExtsBasicSet = wire.NewSet(
 	wire.Bind(new(auth.IDSigner), new(*idimpl.LocalSigner)),
 	manager.ProvideInstaller,
 	wire.Bind(new(plugins.Installer), new(*manager.PluginInstaller)),
+	search2.ProvideDashboardStats,
+	wire.Bind(new(search2.DashboardStats), new(*search2.OssDashboardStats)),
+	search2.ProvideDocumentBuilders,
 )
 
 var wireExtsSet = wire.NewSet(
@@ -120,6 +133,7 @@ var wireExtsTestSet = wire.NewSet(
 var wireExtsBaseCLISet = wire.NewSet(
 	NewModuleRunner,
 
+	metrics.WireSet,
 	featuremgmt.ProvideManagerService,
 	featuremgmt.ProvideToggles,
 	hooks.ProvideService,
@@ -131,4 +145,8 @@ var wireExtsBaseCLISet = wire.NewSet(
 var wireExtsModuleServerSet = wire.NewSet(
 	NewModule,
 	wireExtsBaseCLISet,
+)
+
+var wireExtsStandaloneAPIServerSet = wire.NewSet(
+	standalone.ProvideAPIServerFactory,
 )

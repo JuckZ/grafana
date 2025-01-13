@@ -1,6 +1,6 @@
-import React, { useMemo } from 'react';
+import { useCallback } from 'react';
 
-import { DashboardModel } from '../../state';
+import { DashboardModel } from '../../state/DashboardModel';
 
 import { GenAIButton } from './GenAIButton';
 import { EventTrackingSrc } from './tracking';
@@ -35,13 +35,12 @@ const CHANGES_GENERATION_POSTFIX_PROMPT = [
 ].join('.\n');
 
 export const GenAIDashboardChangesButton = ({ dashboard, onGenerate, disabled }: GenAIDashboardChangesButtonProps) => {
-  const messages = useMemo(() => getMessages(dashboard), [dashboard]);
+  const messages = useCallback(() => getMessages(dashboard), [dashboard]);
 
   return (
     <GenAIButton
       messages={messages}
       onGenerate={onGenerate}
-      loadingText={'Generating changes summary'}
       temperature={0}
       model={'gpt-3.5-turbo-16k'}
       eventTrackingSrc={EventTrackingSrc.dashboardChanges}

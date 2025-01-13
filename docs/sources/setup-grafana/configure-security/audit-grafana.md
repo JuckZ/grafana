@@ -26,7 +26,7 @@ To enable sending Grafana Cloud audit logs to your Grafana Cloud Logs instance, 
 Only API requests or UI actions that trigger an API request generate an audit log.
 
 {{% admonition type="note" %}}
-Available in [Grafana Enterprise]({{< relref "../../introduction/grafana-enterprise" >}}) version 7.3 and later, and [Grafana Cloud](/docs/grafana-cloud).
+Available in [Grafana Enterprise]({{< relref "../../introduction/grafana-enterprise" >}}) and [Grafana Cloud](/docs/grafana-cloud).
 {{% /admonition %}}
 
 ## Audit logs
@@ -48,7 +48,7 @@ Audit logs contain the following fields. The fields followed by **\*** are alway
 | `user.orgId`\*          | number  | Current organization of the user that made the request.                                                                                                                                                                  |
 | `user.orgRole`          | string  | Current role of the user that made the request.                                                                                                                                                                          |
 | `user.name`             | string  | Name of the Grafana user that made the request.                                                                                                                                                                          |
-| `user.tokenId`          | number  | ID of the user authentication token.                                                                                                                                                                                     |
+| `user.authTokenId`      | number  | ID of the user authentication token.                                                                                                                                                                                     |
 | `user.apiKeyId`         | number  | ID of the Grafana API key used to make the request.                                                                                                                                                                      |
 | `user.isAnonymous`\*    | boolean | If an anonymous user made the request, `true`. Otherwise, `false`.                                                                                                                                                       |
 | `action`\*              | string  | The request action. For example, `create`, `update`, or `manage-permissions`.                                                                                                                                            |
@@ -269,40 +269,11 @@ external group.
 
 \* `resources` may also contain a third item with `"type":` set to `"user"` or `"team"`.
 
-#### Alerts and notification channels management
+#### Data source query
 
-| Action                                                                | Distinguishing fields                                                                          |
-| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Save alert manager configuration                                      | `{"action": "update", "requestUri": "/api/alertmanager/RECIPIENT/config/api/v1/alerts"}`       |
-| Reset alert manager configuration                                     | `{"action": "delete", "requestUri": "/api/alertmanager/RECIPIENT/config/api/v1/alerts"}`       |
-| Create silence                                                        | `{"action": "create", "requestUri": "/api/alertmanager/RECIPIENT/api/v2/silences"}`            |
-| Delete silence                                                        | `{"action": "delete", "requestUri": "/api/alertmanager/RECIPIENT/api/v2/silences/SILENCE-ID"}` |
-| Create alert                                                          | `{"action": "create", "requestUri": "/api/ruler/RECIPIENT/api/v2/alerts"}`                     |
-| Create or update rule group                                           | `{"action": "create-update", "requestUri": "/api/ruler/RECIPIENT/api/v1/rules/NAMESPACE"}`     |
-| Delete rule group                                                     | `{"action": "delete", "requestUri": "/api/ruler/RECIPIENT/api/v1/rules/NAMESPACE/GROUP-NAME"}` |
-| Delete namespace                                                      | `{"action": "delete", "requestUri": "/api/ruler/RECIPIENT/api/v1/rules/NAMESPACE"}`            |
-| Test Grafana managed receivers                                        | `{"action": "test", "requestUri": "/api/alertmanager/RECIPIENT/config/api/v1/receivers/test"}` |
-| Create or update the NGalert configuration of the user's organization | `{"action": "create-update", "requestUri": "/api/v1/ngalert/admin_config"}`                    |
-| Delete the NGalert configuration of the user's organization           | `{"action": "delete", "requestUri": "/api/v1/ngalert/admin_config"}`                           |
-
-Where the following:
-
-- `RECIPIENT` is `grafana` for requests handled by Grafana or the data source UID for requests forwarded to a data source.
-- `NAMESPACE` is the string identifier for the rules namespace.
-- `GROUP-NAME` is the string identifier for the rules group.
-- `SILENCE-ID` is the ID of the affected silence.
-
-The following legacy alerting actions are still supported:
-
-| Action                            | Distinguishing fields                                                 |
-| --------------------------------- | --------------------------------------------------------------------- |
-| Test alert rule                   | `{"action": "test", "resources": [{"type": "panel"}]}`                |
-| Pause alert                       | `{"action": "pause", "resources": [{"type": "alert"}]}`               |
-| Pause all alerts                  | `{"action": "pause-all"}`                                             |
-| Test alert notification channel   | `{"action": "test", "resources": [{"type": "alert-notification"}]}`   |
-| Create alert notification channel | `{"action": "create", "resources": [{"type": "alert-notification"}]}` |
-| Update alert notification channel | `{"action": "update", "resources": [{"type": "alert-notification"}]}` |
-| Delete alert notification channel | `{"action": "delete", "resources": [{"type": "alert-notification"}]}` |
+| Action           | Distinguishing fields                                        |
+| ---------------- | ------------------------------------------------------------ |
+| Query datasource | `{"action": "query", "resources": [{"type": "datasource"}]}` |
 
 #### Reporting
 
@@ -338,7 +309,6 @@ The following legacy alerting actions are still supported:
 | Reload provisioned dashboards     | `{"action": "provisioning-dashboards"}`    |
 | Reload provisioned datasources    | `{"action": "provisioning-datasources"}`   |
 | Reload provisioned plugins        | `{"action": "provisioning-plugins"}`       |
-| Reload provisioned notifications  | `{"action": "provisioning-notifications"}` |
 | Reload provisioned alerts         | `{"action": "provisioning-alerts"}`        |
 | Reload provisioned access control | `{"action": "provisioning-accesscontrol"}` |
 
@@ -356,6 +326,17 @@ The following legacy alerting actions are still supported:
 | Set licensing token      | `{"action": "create", "requestUri": "/api/licensing/token"}` |
 | Save billing information | `{"action": "billing-information"}`                          |
 
+#### Cloud migration management
+
+{{< docs/public-preview product="Cloud Migration Assistant" featureFlag="onPremToCloudMigrations" >}}
+
+| Action                           | Distinguishing fields                                       |
+| -------------------------------- | ----------------------------------------------------------- |
+| Connect to a cloud instance      | `{"action": "connect-instance"}`                            |
+| Disconnect from a cloud instance | `{"action": "disconnect-instance"}`                         |
+| Build a snapshot                 | `{"action": "build", "resources": [{"type": "snapshot"}]}`  |
+| Upload a snapshot                | `{"action": "upload", "resources": [{"type": "snapshot"}]}` |
+
 #### Generic actions
 
 In addition to the actions listed above, any HTTP request (`POST`, `PATCH`, `PUT`, and `DELETE`)
@@ -365,7 +346,7 @@ Furthermore, you can also record `GET` requests. See below how to configure it.
 
 | Action         | Distinguishing fields          |
 | -------------- | ------------------------------ |
-| POST request   | `{"action": "action"}`         |
+| POST request   | `{"action": "post-action"}`    |
 | PATCH request  | `{"action": "partial-update"}` |
 | PUT request    | `{"action": "update"}`         |
 | DELETE request | `{"action": "delete"}`         |

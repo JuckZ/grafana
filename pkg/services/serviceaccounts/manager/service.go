@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
-	"github.com/grafana/grafana/pkg/api/routing"
+	"github.com/grafana/authlib/claims"
+
+	"github.com/grafana/grafana/pkg/apimachinery/identity"
+	"github.com/grafana/grafana/pkg/infra/db"
 	"github.com/grafana/grafana/pkg/infra/kvstore"
 	"github.com/grafana/grafana/pkg/infra/log"
 	"github.com/grafana/grafana/pkg/infra/usagestats"
@@ -14,10 +18,8 @@ import (
 	"github.com/grafana/grafana/pkg/services/apikey"
 	"github.com/grafana/grafana/pkg/services/org"
 	"github.com/grafana/grafana/pkg/services/serviceaccounts"
-	"github.com/grafana/grafana/pkg/services/serviceaccounts/api"
 	"github.com/grafana/grafana/pkg/services/serviceaccounts/database"
 	"github.com/grafana/grafana/pkg/services/serviceaccounts/secretscan"
-	"github.com/grafana/grafana/pkg/services/sqlstore"
 	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/setting"
 )
@@ -28,6 +30,11 @@ const (
 )
 
 type ServiceAccountsService struct {
+	acService   accesscontrol.Service
+	permissions accesscontrol.ServiceAccountPermissionsService
+
+	cfg               *setting.Cfg
+	db                db.DB
 	store             store
 	log               log.Logger
 	backgroundLog     log.Logger
@@ -39,16 +46,14 @@ type ServiceAccountsService struct {
 
 func ProvideServiceAccountsService(
 	cfg *setting.Cfg,
-	ac accesscontrol.AccessControl,
-	routeRegister routing.RouteRegister,
 	usageStats usagestats.Service,
-	store *sqlstore.SQLStore,
+	store db.DB,
 	apiKeyService apikey.Service,
 	kvStore kvstore.KVStore,
 	userService user.Service,
 	orgService org.Service,
-	permissionService accesscontrol.ServiceAccountPermissionsService,
-	accesscontrolService accesscontrol.Service,
+	acService accesscontrol.Service,
+	permissions accesscontrol.ServiceAccountPermissionsService,
 ) (*ServiceAccountsService, error) {
 	serviceAccountsStore := database.ProvideServiceAccountsStore(
 		cfg,
@@ -59,19 +64,20 @@ func ProvideServiceAccountsService(
 		orgService,
 	)
 	s := &ServiceAccountsService{
+		cfg:           cfg,
+		db:            store,
+		acService:     acService,
+		permissions:   permissions,
 		store:         serviceAccountsStore,
 		log:           log.New("serviceaccounts"),
 		backgroundLog: log.New("serviceaccounts.background"),
 	}
 
-	if err := RegisterRoles(accesscontrolService); err != nil {
+	if err := RegisterRoles(acService); err != nil {
 		s.log.Error("Failed to register roles", "error", err)
 	}
 
 	usageStats.RegisterMetricsFunc(s.getUsageMetrics)
-
-	serviceaccountsAPI := api.NewServiceAccountsAPI(cfg, s, ac, accesscontrolService, routeRegister, permissionService)
-	serviceaccountsAPI.RegisterAPIEndpoints()
 
 	s.secretScanEnabled = cfg.SectionWithEnvOverrides("secretscan").Key("enabled").MustBool(false)
 	s.secretScanInterval = cfg.SectionWithEnvOverrides("secretscan").
@@ -146,21 +152,57 @@ func (sa *ServiceAccountsService) Run(ctx context.Context) error {
 	}
 }
 
+var _ serviceaccounts.Service = (*ServiceAccountsService)(nil)
+
 func (sa *ServiceAccountsService) CreateServiceAccount(ctx context.Context, orgID int64, saForm *serviceaccounts.CreateServiceAccountForm) (*serviceaccounts.ServiceAccountDTO, error) {
 	if err := validOrgID(orgID); err != nil {
 		return nil, err
 	}
-	return sa.store.CreateServiceAccount(ctx, orgID, saForm)
+
+	var serviceAccount *serviceaccounts.ServiceAccountDTO
+	err := sa.db.InTransaction(ctx, func(ctx context.Context) error {
+		var err error
+		serviceAccount, err = sa.store.CreateServiceAccount(ctx, orgID, saForm)
+		if err != nil {
+			return err
+		}
+
+		user, err := identity.GetRequester(ctx)
+		if err == nil && sa.cfg.RBAC.PermissionsOnCreation("service-account") {
+			if user.IsIdentityType(claims.TypeUser) {
+				userID, err := user.GetInternalID()
+				if err != nil {
+					return err
+				}
+
+				if _, err := sa.permissions.SetUserPermission(ctx,
+					orgID, accesscontrol.User{ID: userID},
+					strconv.FormatInt(serviceAccount.Id, 10), "Admin"); err != nil {
+					return err
+				}
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return serviceAccount, nil
 }
 
-func (sa *ServiceAccountsService) RetrieveServiceAccount(ctx context.Context, orgID int64, serviceAccountID int64) (*serviceaccounts.ServiceAccountProfileDTO, error) {
-	if err := validOrgID(orgID); err != nil {
+func (sa *ServiceAccountsService) RetrieveServiceAccount(ctx context.Context, query *serviceaccounts.GetServiceAccountQuery) (*serviceaccounts.ServiceAccountProfileDTO, error) {
+	if err := validOrgID(query.OrgID); err != nil {
 		return nil, err
 	}
-	if err := validServiceAccountID(serviceAccountID); err != nil {
-		return nil, err
+	if err := validServiceAccountID(query.ID); err != nil {
+		if err := validServiceAccountUID(query.UID); err != nil {
+			return nil, fmt.Errorf("invalid service account ID %d and UID %s has been specified", query.ID, query.UID)
+		}
 	}
-	return sa.store.RetrieveServiceAccount(ctx, orgID, serviceAccountID)
+	return sa.store.RetrieveServiceAccount(ctx, query)
 }
 
 func (sa *ServiceAccountsService) RetrieveServiceAccountIdByName(ctx context.Context, orgID int64, name string) (int64, error) {
@@ -180,7 +222,13 @@ func (sa *ServiceAccountsService) DeleteServiceAccount(ctx context.Context, orgI
 	if err := validServiceAccountID(serviceAccountID); err != nil {
 		return err
 	}
-	return sa.store.DeleteServiceAccount(ctx, orgID, serviceAccountID)
+	if err := sa.store.DeleteServiceAccount(ctx, orgID, serviceAccountID); err != nil {
+		return err
+	}
+	if err := sa.acService.DeleteUserPermissions(ctx, orgID, serviceAccountID); err != nil {
+		return err
+	}
+	return sa.permissions.DeleteResourcePermissions(ctx, orgID, fmt.Sprintf("%d", serviceAccountID))
 }
 
 func (sa *ServiceAccountsService) EnableServiceAccount(ctx context.Context, orgID, serviceAccountID int64, enable bool) error {
@@ -257,12 +305,21 @@ func validOrgID(orgID int64) error {
 	}
 	return nil
 }
+
 func validServiceAccountID(serviceaccountID int64) error {
 	if serviceaccountID == 0 {
 		return serviceaccounts.ErrServiceAccountInvalidID.Errorf("invalid service account ID 0 has been specified")
 	}
 	return nil
 }
+
+func validServiceAccountUID(saUID string) error {
+	if saUID == "" {
+		return serviceaccounts.ErrServiceAccountInvalidID.Errorf("invalid service account UID has been specified")
+	}
+	return nil
+}
+
 func validServiceAccountTokenID(tokenID int64) error {
 	if tokenID == 0 {
 		return serviceaccounts.ErrServiceAccountInvalidTokenID.Errorf("invalid service account token ID 0 has been specified")

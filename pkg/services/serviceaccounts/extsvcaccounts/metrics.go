@@ -5,9 +5,7 @@ import (
 	"time"
 
 	"github.com/grafana/grafana/pkg/infra/log"
-	"github.com/grafana/grafana/pkg/services/extsvcauth"
 	"github.com/grafana/grafana/pkg/services/serviceaccounts"
-	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -17,7 +15,7 @@ type metrics struct {
 	deletedCount prometheus.Counter
 }
 
-func newMetrics(reg prometheus.Registerer, saSvc serviceaccounts.Service, logger log.Logger) *metrics {
+func newMetrics(reg prometheus.Registerer, defaultOrgID int64, saSvc serviceaccounts.Service, logger log.Logger) *metrics {
 	var m metrics
 
 	m.storedCount = prometheus.NewGaugeFunc(
@@ -30,15 +28,10 @@ func newMetrics(reg prometheus.Registerer, saSvc serviceaccounts.Service, logger
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			res, err := saSvc.SearchOrgServiceAccounts(ctx, &serviceaccounts.SearchOrgServiceAccountsQuery{
-				OrgID:     extsvcauth.TmpOrgID,
-				Filter:    serviceaccounts.FilterOnlyExternal,
-				CountOnly: true,
-				SignedInUser: &user.SignedInUser{
-					OrgID: extsvcauth.TmpOrgID,
-					Permissions: map[int64]map[string][]string{
-						extsvcauth.TmpOrgID: {serviceaccounts.ActionRead: {"serviceaccounts:id:*"}},
-					},
-				},
+				OrgID:        defaultOrgID,
+				Filter:       serviceaccounts.FilterOnlyExternal,
+				CountOnly:    true,
+				SignedInUser: extsvcuser(defaultOrgID),
 			})
 			if err != nil {
 				logger.Error("Could not compute extsvc_total metric", "error", err)

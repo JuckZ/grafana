@@ -1,25 +1,29 @@
-import { rest } from 'msw';
+import { HttpResponse, http } from 'msw';
+import { SetupServer } from 'msw/node';
 
+import { MIMIR_DATASOURCE_UID } from 'app/features/alerting/unified/mocks/server/constants';
 import { AlertManagerCortexConfig } from 'app/plugins/datasource/alertmanager/types';
-
-import { setupMswServer } from '../../../mockApi';
 
 import mimirAlertmanagerMock from './alertmanager.mimir.config.mock.json';
 
 // this one emulates a mimir server setup
-export const MIMIR_DATASOURCE_UID = 'mimir';
 
-export default () => {
-  const server = setupMswServer();
-
+/** @deprecated Move to main alerting MSW server instead */
+export default (server: SetupServer) => {
   server.use(
-    rest.get(`/api/alertmanager/${MIMIR_DATASOURCE_UID}/config/api/v1/alerts`, (_req, res, ctx) =>
-      res(ctx.json<AlertManagerCortexConfig>(mimirAlertmanagerMock))
+    http.get(`/api/alertmanager/${MIMIR_DATASOURCE_UID}/config/api/v1/alerts`, () =>
+      HttpResponse.json(mimirAlertmanagerMock)
     ),
-    rest.get(`/api/datasources/proxy/uid/${MIMIR_DATASOURCE_UID}/api/v1/status/buildinfo`, (_req, res, ctx) =>
-      res(ctx.status(404))
-    ),
-    // this endpoint will respond if the OnCall plugin is installed
-    rest.get('/api/plugins/grafana-oncall-app/settings', (_req, res, ctx) => res(ctx.status(404)))
+    http.get(`/api/datasources/proxy/uid/${MIMIR_DATASOURCE_UID}/api/v1/status/buildinfo`, () =>
+      HttpResponse.json<AlertManagerCortexConfig>(
+        {
+          template_files: {},
+          alertmanager_config: {},
+        },
+        { status: 404 }
+      )
+    )
   );
+
+  return server;
 };
